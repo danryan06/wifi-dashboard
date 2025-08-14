@@ -2,6 +2,8 @@ from flask import Flask, render_template, request, redirect, jsonify, flash
 import os
 import subprocess
 import logging
+import time
+import re
 from datetime import datetime
 
 app = Flask(__name__)
@@ -12,6 +14,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "configs", "ssid.conf")
 SETTINGS_FILE = os.path.join(BASE_DIR, "configs", "settings.conf")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
+
+# Throughput monitoring
+last_stats = {}
+last_stats_time = 0
 
 # Setup logging
 logging.basicConfig(
@@ -38,8 +44,12 @@ def read_config():
                 if len(lines) >= 2:
                     ssid, password = lines[0], lines[1]
     except Exception as e:
-        logger.error(f"Error reading config: {e}")
-    return ssid, password
+        logger.error(f"Error shutting down: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+if __name__ == "__main__":
+    log_action("Wi-Fi Test Dashboard v5.0 with Throughput Monitoring starting")
+    app.run(host="0.0.0.0", port=5000, debug=False)
 
 def write_config(ssid, password):
     """Write SSID configuration"""
@@ -64,6 +74,80 @@ def read_log_file(log_file, lines=20):
     except Exception as e:
         logger.error(f"Error reading log file {log_file}: {e}")
         return [f"Error reading log: {e}"]
+
+def get_network_stats():
+    """Get network interface statistics from /proc/net/dev"""
+    stats = {}
+    try:
+        with open('/proc/net/dev', 'r') as f:
+            lines = f.readlines()
+            
+        for line in lines[2:]:  # Skip header lines
+            if ':' in line:
+                parts = line.split(':')
+                iface = parts[0].strip()
+                
+                # Skip loopback and other virtual interfaces
+                if iface in ['lo'] or 'docker' in iface or 'veth' in iface:
+                    continue
+                
+                # Parse stats
+                fields = parts[1].split()
+                if len(fields) >= 9:
+                    stats[iface] = {
+                        'rx_bytes': int(fields[0]),
+                        'tx_bytes': int(fields[8]),
+                        'rx_packets': int(fields[1]),
+                        'tx_packets': int(fields[9]),
+                        'timestamp': time.time()
+                    }
+    except Exception as e:
+        logger.error(f"Error reading network stats: {e}")
+    
+    return stats
+
+def calculate_throughput():
+    """Calculate throughput based on network stats"""
+    global last_stats, last_stats_time
+    
+    current_stats = get_network_stats()
+    current_time = time.time()
+    
+    throughput = {}
+    
+    if last_stats and (current_time - last_stats_time) > 0:
+        time_diff = current_time - last_stats_time
+        
+        for iface in current_stats:
+            if iface in last_stats:
+                current = current_stats[iface]
+                previous = last_stats[iface]
+                
+                # Calculate bytes per second
+                rx_rate = max(0, (current['rx_bytes'] - previous['rx_bytes']) / time_diff)
+                tx_rate = max(0, (current['tx_bytes'] - previous['tx_bytes']) / time_diff)
+                
+                # Check if traffic service is active
+                try:
+                    result = subprocess.run(['systemctl', 'is-active', f'traffic-{iface}.service'], 
+                                          capture_output=True, text=True, timeout=2)
+                    is_active = result.stdout.strip() == 'active'
+                except:
+                    is_active = False
+                
+                throughput[iface] = {
+                    'download': rx_rate,
+                    'upload': tx_rate,
+                    'active': is_active,
+                    'rx_packets': current['rx_packets'] - previous['rx_packets'],
+                    'tx_packets': current['tx_packets'] - previous['tx_packets']
+                }
+    
+    # Update last stats
+    last_stats = current_stats
+    last_stats_time = current_time
+    
+    return throughput
 
 def get_system_info():
     """Get system information"""
@@ -162,6 +246,20 @@ def status():
         })
     except Exception as e:
         logger.error(f"Error in status endpoint: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/throughput")
+def api_throughput():
+    """API endpoint for real-time throughput data"""
+    try:
+        throughput_data = calculate_throughput()
+        return jsonify({
+            "success": True,
+            "throughput": throughput_data,
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error in throughput endpoint: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/traffic_control")
@@ -346,7 +444,6 @@ def service_action():
     
     return redirect("/")
 
-
 @app.route("/reboot", methods=["POST"])
 def reboot():
     """Reboot system"""
@@ -366,9 +463,4 @@ def shutdown():
         subprocess.Popen(["sudo", "poweroff"])
         return jsonify({"success": True, "message": "System shutting down..."}), 200
     except Exception as e:
-        logger.error(f"Error shutting down: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-if __name__ == "__main__":
-    log_action("Wi-Fi Test Dashboard v5.0 starting")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+        logger.error(
