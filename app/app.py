@@ -43,9 +43,12 @@ def read_config():
                 lines = [line.strip() for line in f.readlines()]
                 if len(lines) >= 2:
                     ssid, password = lines[0], lines[1]
+        # ALWAYS return a tuple
+        return ssid, password
     except Exception as e:
-        logger.error(f"Error shutting down: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        # Log the error and return safe defaults; don't return Response objects here
+        logger.error(f"Error reading config: {e}")
+        return "", ""
 
 def write_config(ssid, password):
     """Write SSID configuration"""
