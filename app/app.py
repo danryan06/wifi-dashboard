@@ -346,6 +346,7 @@ def service_action():
     
     return redirect("/")
 
+
 @app.route("/reboot", methods=["POST"])
 def reboot():
     """Reboot system"""
