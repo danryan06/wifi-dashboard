@@ -18,7 +18,7 @@ export NEEDRESTART_MODE=a
 log_info "Updating package lists..."
 apt-get update -y
 
-# Install core system packages
+# Install core system packages (without problematic ones)
 log_info "Installing core system packages..."
 apt-get install -y \
     network-manager \
@@ -33,7 +33,6 @@ apt-get install -y \
     dos2unix \
     dnsutils \
     net-tools \
-    speedtest-cli \
     youtube-dl \
     ffmpeg \
     git \
@@ -46,6 +45,15 @@ apt-get install -y \
 log_info "Installing network testing tools..."
 echo 'iperf3 iperf3/start_daemon boolean false' | debconf-set-selections
 apt-get install -y iperf3 tcpdump
+
+# Install speedtest-cli with fallback
+log_info "Installing speedtest tools..."
+if apt-get install -y speedtest-cli; then
+    log_info "✓ speedtest-cli installed successfully"
+else
+    log_warn "✗ speedtest-cli failed to install from apt, installing via pip"
+    pip3 install speedtest-cli --break-system-packages || pip3 install speedtest-cli || log_warn "Failed to install speedtest-cli via pip"
+fi
 log_info "Installing yt-dlp..."
 if ! command -v yt-dlp >/dev/null 2>&1; then
     pip3 install yt-dlp --break-system-packages >/dev/null 2>&1 || {
