@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Universal traffic generator that can target specific interfaces
+# Usage: ./interface_traffic_generator.sh <interface> <traffic_type> [intensity]
+
+INTERFACE="${1:-eth0}"
+TRAFFIC_TYPE="${2:-all}"
+INTENSITY="${3:-medium}"
+
+LOG_FILE="$HOME/wifi_test_dashboard/logs/traffic-${INTERFACE}.log"
+SETTINGS="$HOME/wifi_test_dashboard/configs/settings.conf"
+
+# Source settings if available
+[[ -f "$SETTINGS" ]] && source "$SETTINGS"
+
+# Traffic intensity settings
+case "$INTENSITY" in
+    "light")
+        SPEEDTEST_INTERVAL=600    # 10 minutes
+        DOWNLOAD_INTERVAL=300     # 5 minutes
+        CONCURRENT_DOWNLOADS=2
+        CHUNK_SIZE=52428800       # 50MB
+        YOUTUBE_INTERVAL=900      # 15 minutes
+        ;;
+    "medium")
+        SPEEDTEST_INTERVAL=300    # 5 minutes
+        DOWNLOAD_INTERVAL=120     # 2 minutes
+        CONCURRENT_DOWNLOADS=3
+        CHUNK_SIZE=104857600      # 100MB
+        YOUTUBE_INTERVAL=600      # 10 minutes
+        ;;
+    "heavy")
+        SPEEDTEST_INTERVAL=180    # 3 minutes
+        DOWNLOAD_INTERVAL=60      # 1 minute
+        CONCURRENT_DOWNLOADS=5
+        CHUNK_SIZE=209715200      # 200MB
+        YOUTUBE_INTERVAL=300      # 5 minutes
+        ;;
+esac
+
+# YouTube playlists for traffic generation
+YOUTUBE_PLAYLISTS=(
+    "https://www.youtube.com/playlist?list=PLrAXtmRdnEQy5tts6p-v1URsm7wOSM-M0"  # Music
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ"  # Single video
+    "https://www.youtube.com/watch?v=jNQXAC9IVRw"  # Another single video
+)
+
+# Test URLs for downloads
+DOWNLOAD_URLS=(
+    "https://proof.ovh.net/files/100Mb.dat"
+    "https://speed.hetzner.de/100MB.bin"
+    "https://ash-speed.hetzner.com/100MB.bin"
+    "http://ipv4.download.thinkbroadband.com/50MB.zip"
+    "https://releases.ubuntu.com/20.04/ubuntu-20.04.6-desktop-amd64.iso"
+)
+
+log_msg() {
+    echo "[$(date '+%F %T')] TRAFFIC-${INTERFACE^^}: $1" | tee -a "$LOG_FILE"
+}
+
+# Check if interface exists and is up
+check_interface() {
+    if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+        log_msg "✗ Interface $INTERFACE not found"
+        return 1
+    fi
+    
+    if ! ip route show dev "$INTERFACE" | grep -q .; then
+        log_msg "⚠ Interface $INTERFACE has no routes - traffic may not work"
+    fi
+    
+    local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
+    if [[ -n "$ip_addr" ]]; then
+        log_msg "✓ Interface $INTERFACE ready with IP: $ip_addr"
+    else
+        log_msg "⚠ Interface $INTERFACE has no IP address"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Force traffic through specific interface using routing
+setup_interface_routing() {
+    local test_ips=("8.8.8.8" "1.1.1.1" "208.67.222.222")
+    local gateway
+    
+    # Get the gateway for this interface
+    gateway=$(ip route show dev "$INTERFACE" | grep default | awk '{print $3}' | head -n1)
+    
+    if [[ -n "$gateway" ]]; then
+        # Add specific routes for test traffic through this interface
+        for ip in "${test_ips[@]}"; do
+            sudo ip route add "$ip/32" via "$gateway" dev "$INTERFACE" 2>/dev/null || true
+        done
+        log_msg "✓ Routing configured for $INTERFACE via gateway $gateway"
+    else
+        log_msg "⚠ No gateway found for $INTERFACE"
+    fi
+}
+
+# Clean up interface-specific routes
+cleanup_interface_routing() {
+    local test_ips=("8.8.8.8" "1.1.1.1" "208.67.222.222")
+    for ip in "${test_ips[@]}"; do
+        sudo ip route del "$ip/32" dev "$INTERFACE" 2>/dev/null || true
+    done
+}
+
+# Interface-specific speedtest
+run_interface_speedtest() {
+    while true; do
+        if check_interface; then
+            log_msg "Running speedtest on $INTERFACE (intensity: $INTENSITY)..."
+            
+            # Bind to specific interface if possible
+            local bind_option=""
+            local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -n1)
+            [[ -n "$ip_addr" ]] && bind_option="--source=$ip_addr"
+            
+            if timeout 120 speedtest --accept-license --accept-gdpr $bind_option --format=human-readable 2>&1 | tee -a "$LOG_FILE"; then
+                log_msg "✓ Speedtest completed on $INTERFACE"
+            else
+                log_msg "✗ Speedtest failed on $INTERFACE"
+            fi
+        else
+            log_msg "Interface $INTERFACE not ready for speedtest"
+        fi
+        sleep $SPEEDTEST_INTERVAL
+    done
+}
+
+# Interface-specific downloads with curl binding
+run_interface_downloads() {
+    while true; do
+        if check_interface; then
+            local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -n1)
+            
+            if [[ -n "$ip_addr" ]]; then
+                log_msg "Starting $CONCURRENT_DOWNLOADS concurrent downloads on $INTERFACE"
+                
+                for ((i=0; i<$CONCURRENT_DOWNLOADS; i++)); do
+                    {
+                        local url=${DOWNLOAD_URLS[$((RANDOM % ${#DOWNLOAD_URLS[@]}))]}
+                        log_msg "Download $((i+1)): $(basename $url) via $INTERFACE"
+                        
+                        # Use curl with interface binding and limited download size
+                        if curl --interface "$INTERFACE" \
+                                --max-time 180 \
+                                --range "0-$CHUNK_SIZE" \
+                                --silent \
+                                --location \
+                                --output /dev/null \
+                                "$url" 2>/dev/null; then
+                            log_msg "✓ Download $((i+1)) completed on $INTERFACE"
+                        else
+                            log_msg "✗ Download $((i+1)) failed on $INTERFACE"
+                        fi
+                    } &
+                done
+                
+                # Wait for all downloads to complete
+                wait
+                log_msg "✓ All concurrent downloads completed on $INTERFACE"
+            else
+                log_msg "No IP address on $INTERFACE for downloads"
+            fi
+        fi
+        sleep $DOWNLOAD_INTERVAL
+    done
+}
+
+# YouTube traffic generation
+run_youtube_traffic() {
+    # Check if yt-dlp or youtube-dl is available
+    local youtube_cmd=""
+    if command -v yt-dlp >/dev/null 2>&1; then
+        youtube_cmd="yt-dlp"
+    elif command -v youtube-dl >/dev/null 2>&1; then
+        youtube_cmd="youtube-dl"
+    else
+        log_msg "⚠ No YouTube downloader available, skipping YouTube traffic"
+        return
+    fi
+    
+    while true; do
+        if check_interface; then
+            local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -n1)
+            
+            if [[ -n "$ip_addr" ]]; then
+                log_msg "Starting YouTube traffic generation on $INTERFACE"
+                
+                # Select random video/playlist
+                local url=${YOUTUBE_PLAYLISTS[$((RANDOM % ${#YOUTUBE_PLAYLISTS[@]}))]}
+                
+                # Create temporary directory for downloads
+                local temp_dir=$(mktemp -d)
+                
+                {
+                    # Download video(s) with interface binding (simulate streaming)
+                    # Download only a portion to generate traffic without filling disk
+                    if timeout 300 $youtube_cmd \
+                        --quiet \
+                        --no-warnings \
+                        --max-downloads 2 \
+                        --format "worst[height<=480]" \
+                        --external-downloader curl \
+                        --external-downloader-args "--interface $INTERFACE --max-time 180" \
+                        --output "$temp_dir/%(title)s.%(ext)s" \
+                        "$url" 2>/dev/null; then
+                        log_msg "✓ YouTube traffic completed on $INTERFACE"
+                    else
+                        log_msg "✗ YouTube traffic failed on $INTERFACE"
+                    fi
+                } || {
+                    log_msg "✗ YouTube traffic timed out on $INTERFACE"
+                }
+                
+                # Clean up downloaded files
+                rm -rf "$temp_dir"
+            else
+                log_msg "No IP address on $INTERFACE for YouTube traffic"
+            fi
+        fi
+        sleep $YOUTUBE_INTERVAL
+    done
+}
+
+# Interface-specific ping flood (light continuous traffic)
+run_interface_ping_traffic() {
+    local targets=("8.8.8.8" "1.1.1.1" "208.67.222.222")
+    
+    while true; do
+        if check_interface; then
+            for target in "${targets[@]}"; do
+                # Send 10 pings every 30 seconds through specific interface
+                if ping -I "$INTERFACE" -c 10 -i 0.2 "$target" >/dev/null 2>&1; then
+                    log_msg "✓ Ping traffic to $target via $INTERFACE successful"
+                else
+                    log_msg "✗ Ping traffic to $target via $INTERFACE failed"
+                fi
+                sleep 30
+            done
+        fi
+        sleep 60
+    done
+}
+
+# Main traffic generation controller
+main_traffic_loop() {
+    log_msg "Starting traffic generation on $INTERFACE (type: $TRAFFIC_TYPE, intensity: $INTENSITY)"
+    
+    # Setup interface-specific routing
+    setup_interface_routing
+    
+    # Start background traffic generators based on type
+    case "$TRAFFIC_TYPE" in
+        "speedtest"|"all")
+            run_interface_speedtest &
+            SPEEDTEST_PID=$!
+            log_msg "Started speedtest generator (PID: $SPEEDTEST_PID)"
+            ;;
+    esac
+    
+    case "$TRAFFIC_TYPE" in
+        "downloads"|"all")
+            run_interface_downloads &
+            DOWNLOAD_PID=$!
+            log_msg "Started download generator (PID: $DOWNLOAD_PID)"
+            ;;
+    esac
+    
+    case "$TRAFFIC_TYPE" in
+        "youtube"|"all")
+            if [[ "${ENABLE_YOUTUBE_TRAFFIC:-true}" == "true" ]]; then
+                run_youtube_traffic &
+                YOUTUBE_PID=$!
+                log_msg "Started YouTube traffic generator (PID: $YOUTUBE_PID)"
+            fi
+            ;;
+    esac
+    
+    case "$TRAFFIC_TYPE" in
+        "ping"|"all")
+            run_interface_ping_traffic &
+            PING_PID=$!
+            log_msg "
