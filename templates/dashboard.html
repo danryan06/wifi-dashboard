@@ -627,6 +627,7 @@
     <script>
         let currentData = {};
         let refreshInterval;
+        let refreshPaused = false;
         
         // Tab switching
         document.querySelectorAll(".tab").forEach(tab => {
@@ -661,8 +662,13 @@
             }
         }
         
-        // Data refresh
+        // Data refresh with intelligent form protection
         async function refreshData() {
+            if (refreshPaused) {
+                console.log('Refresh paused - user editing');
+                return;
+            }
+            
             try {
                 const response = await fetch('/status');
                 if (!response.ok) throw new Error('Failed to fetch status');
@@ -693,10 +699,21 @@
             document.getElementById('active-connections').textContent = data.system_info?.active_connections || 'Unknown';
             document.getElementById('netem-status').textContent = data.system_info?.netem_status || 'Not configured';
             
-            // Update form if not focused
+            // Only update form fields if user is not actively editing them
             const ssidInput = document.getElementById('ssid');
-            if (document.activeElement !== ssidInput) {
+            const passwordInput = document.getElementById('password');
+            const wifiTab = document.getElementById('wifi');
+            const isWifiTabActive = !wifiTab.classList.contains('hidden');
+            
+            // Don't update form if user is editing or form has been modified
+            const userIsEditing = document.activeElement === ssidInput || 
+                                document.activeElement === passwordInput ||
+                                (isWifiTabActive && (ssidInput.value !== '' && ssidInput.value !== data.ssid)) ||
+                                (isWifiTabActive && passwordInput.value !== '');
+            
+            if (!userIsEditing) {
                 ssidInput.value = data.ssid || '';
+                // Don't overwrite password field to preserve user input
             }
             
             // Update services
@@ -899,9 +916,28 @@
             }, 5000);
         }
         
+        // Form protection - pause refresh when editing
+        document.getElementById('ssid').addEventListener('focus', function() {
+            refreshPaused = true;
+            showMessage('Auto-refresh paused while editing', 'info');
+        });
+        
+        document.getElementById('password').addEventListener('focus', function() {
+            refreshPaused = true;
+            showMessage('Auto-refresh paused while editing', 'info');
+        });
+        
+        document.getElementById('ssid').addEventListener('blur', function() {
+            setTimeout(() => { refreshPaused = false; }, 2000);
+        });
+        
+        document.getElementById('password').addEventListener('blur', function() {
+            setTimeout(() => { refreshPaused = false; }, 2000);
+        });
+        
         // Initialize
         refreshData();
-        refreshInterval = setInterval(refreshData, 5000);
+        refreshInterval = setInterval(refreshData, 10000); // 10 second refresh
         
         // Auto-dismiss flash messages
         setTimeout(() => {
