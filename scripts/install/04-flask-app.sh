@@ -1,3 +1,21 @@
+#!/usr/bin/env bash
+# scripts/install/04-flask-app.sh
+# Download and install Flask application
+
+set -euo pipefail
+
+log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
+
+log_info "Installing Flask application..."
+
+# Download the Flask application directly from the repository
+if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/app/app.py" -o "$PI_HOME/wifi_test_dashboard/app.py"; then
+    log_info "✓ Downloaded Flask application"
+else
+    log_info "✗ Failed to download Flask application, creating locally..."
+    
+    # Fallback: Create the Flask application locally
+    cat > "$PI_HOME/wifi_test_dashboard/app.py" <<'FLASK_APP_EOF'
 from flask import Flask, render_template, request, redirect, jsonify, flash
 import os
 import subprocess
@@ -174,7 +192,7 @@ def traffic_status():
     """API endpoint for traffic generation status"""
     try:
         interfaces = ['eth0', 'wlan0', 'wlan1']
-        traffic_status = {}
+        traffic_status_data = {}
         
         for interface in interfaces:
             service_name = f"traffic-{interface}"
@@ -198,7 +216,7 @@ def traffic_status():
                 log_file = os.path.join(LOG_DIR, f"traffic-{interface}.log")
                 recent_logs = read_log_file(f"traffic-{interface}.log", 5) if os.path.exists(log_file) else []
                 
-                traffic_status[interface] = {
+                traffic_status_data[interface] = {
                     'service_status': status,
                     'ip_address': ip_info,
                     'recent_logs': recent_logs,
@@ -206,7 +224,7 @@ def traffic_status():
                 }
                 
             except Exception as e:
-                traffic_status[interface] = {
+                traffic_status_data[interface] = {
                     'service_status': f'error: {e}',
                     'ip_address': 'unknown',
                     'recent_logs': [],
@@ -214,7 +232,7 @@ def traffic_status():
                 }
         
         return jsonify({
-            "interfaces": traffic_status,
+            "interfaces": traffic_status_data,
             "success": True
         })
     except Exception as e:
@@ -372,6 +390,7 @@ if __name__ == "__main__":
     log_action("Wi-Fi Test Dashboard v5.0 starting")
     app.run(host="0.0.0.0", port=5000, debug=False)
 FLASK_APP_EOF
+fi
 
 # Ensure proper ownership
 chown "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/app.py"
@@ -383,51 +402,4 @@ else
     log_info "⚠ Flask application verification had issues (may still work)"
 fi
 
-log_info "✓ Flask application installation completed"test', 'wifi-good', 'wifi-bad']:
-            flash("Invalid service", "error")
-            return redirect("/")
-        
-        if action not in ['start', 'stop', 'restart']:
-            flash("Invalid action", "error")
-            return redirect("/")
-        
-        result = subprocess.run(['sudo', 'systemctl', action, f'{service}.service'], 
-                              capture_output=True, text=True, timeout=15)
-        
-        if result.returncode == 0:
-            log_action(f"Service {service} {action}ed via UI")
-            flash(f"Service {service} {action}ed successfully", "success")
-        else:
-            flash(f"Failed to {action} service {service}: {result.stderr}", "error")
-            
-    except Exception as e:
-        logger.error(f"Error with service action: {e}")
-        flash(f"Error performing service action: {e}", "error")
-    
-    return redirect("/")
-
-@app.route("/reboot", methods=["POST"])
-def reboot():
-    """Reboot system"""
-    try:
-        log_action("System reboot requested via UI")
-        subprocess.Popen(["sudo", "reboot"])
-        return jsonify({"success": True, "message": "System rebooting..."}), 200
-    except Exception as e:
-        logger.error(f"Error rebooting: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-@app.route("/shutdown", methods=["POST"])
-def shutdown():
-    """Shutdown system"""
-    try:
-        log_action("System shutdown requested via UI")
-        subprocess.Popen(["sudo", "poweroff"])
-        return jsonify({"success": True, "message": "System shutting down..."}), 200
-    except Exception as e:
-        logger.error(f"Error shutting down: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-if __name__ == "__main__":
-    log_action("Wi-Fi Test Dashboard v5.0 starting")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+log_info "✓ Flask application installation completed"
