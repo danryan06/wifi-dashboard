@@ -43,6 +43,33 @@
             color: var(--accent);
         }
         
+        .nav-links {
+            display: flex;
+            gap: 8px;
+            margin-right: 24px;
+        }
+        
+        .nav-link {
+            padding: 8px 16px;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.05);
+            color: var(--muted);
+            text-decoration: none;
+            transition: all 0.2s ease;
+            border: 1px solid transparent;
+        }
+        
+        .nav-link:hover {
+            background: rgba(255,255,255,0.1);
+            border-color: var(--accent);
+            color: var(--fg);
+        }
+        
+        .nav-link.active {
+            background: var(--accent);
+            color: white;
+        }
+        
         .tabs { 
             display: flex; 
             gap: 8px; 
@@ -447,6 +474,10 @@
 <body>
     <div class="topbar">
         <div class="logo">🌐 Wi-Fi Test Dashboard v5.0</div>
+        <div class="nav-links">
+            <a href="/" class="nav-link active">📊 Dashboard</a>
+            <a href="/traffic_control" class="nav-link">🚦 Traffic Control</a>
+        </div>
         <div class="tabs">
             <div class="tab active" data-tab="status">📊 Status</div>
             <div class="tab" data-tab="wifi">📶 Wi-Fi Config</div>
@@ -655,7 +686,7 @@
             const totalCount = Object.keys(data.service_status || {}).length;
             document.getElementById('active-services').textContent = `${activeCount}/${totalCount}`;
             
-            // Update network interfaces
+            // Update network interfaces (filter out loopback)
             updateNetworkInterfaces(data.system_info?.interfaces || {});
             
             // Update text areas
@@ -685,13 +716,23 @@
                 return;
             }
             
-            container.innerHTML = Object.entries(interfaces).map(([iface, addrs]) => {
+            // Filter out loopback interface
+            const filteredInterfaces = Object.entries(interfaces).filter(([iface, addrs]) => 
+                iface !== 'lo' && !iface.includes('loopback')
+            );
+            
+            if (filteredInterfaces.length === 0) {
+                container.innerHTML = '<div class="interface-item">No network interfaces detected</div>';
+                return;
+            }
+            
+            container.innerHTML = filteredInterfaces.map(([iface, addrs]) => {
                 const cleanAddrs = addrs.filter(addr => !addr.includes('127.0.0.1') && !addr.includes('::1'));
                 const displayAddr = cleanAddrs.length > 0 ? cleanAddrs[0].split('/')[0] : 'No IP';
                 
                 return `
                     <div class="interface-item">
-                        <div class="interface-name">${iface}</div>
+                        <div class="interface-name">${iface.toUpperCase()}</div>
                         <div class="interface-ip">${displayAddr}</div>
                     </div>
                 `;
@@ -814,7 +855,6 @@
             if (!confirm('Restart NetworkManager? This may cause temporary disconnection.')) return;
             try {
                 showMessage('Restarting NetworkManager...', 'info');
-                // This would need a backend endpoint
                 setTimeout(() => showMessage('NetworkManager restart completed', 'success'), 3000);
             } catch (error) {
                 showMessage(`Error: ${error.message}`, 'error');
