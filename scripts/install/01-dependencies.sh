@@ -18,7 +18,7 @@ export NEEDRESTART_MODE=a
 log_info "Updating package lists..."
 apt-get update -y
 
-# Install core system packages (without problematic ones)
+# Install core system packages (without speedtest packages)
 log_info "Installing core system packages..."
 apt-get install -y \
     network-manager \
@@ -46,13 +46,20 @@ log_info "Installing network testing tools..."
 echo 'iperf3 iperf3/start_daemon boolean false' | debconf-set-selections
 apt-get install -y iperf3 tcpdump
 
-# Install speedtest-cli with fallback
-log_info "Installing speedtest tools..."
-if apt-get install -y speedtest-cli; then
-    log_info "✓ speedtest-cli installed successfully"
+# Install Official Ookla Speedtest CLI (the better, official version)
+log_info "Installing official Ookla Speedtest CLI..."
+if ! command -v speedtest >/dev/null 2>&1; then
+    # Add Ookla repository and install official speedtest
+    curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash
+    apt-get update >/dev/null 2>&1
+    if apt-get install -y speedtest; then
+        log_info "✓ Official Ookla Speedtest CLI installed"
+    else
+        log_warn "✗ Failed to install official speedtest, installing Python version as fallback"
+        pip3 install speedtest-cli --break-system-packages || pip3 install speedtest-cli || log_warn "Failed to install any speedtest tool"
+    fi
 else
-    log_warn "✗ speedtest-cli failed to install from apt, installing via pip"
-    pip3 install speedtest-cli --break-system-packages || pip3 install speedtest-cli || log_warn "Failed to install speedtest-cli via pip"
+    log_info "✓ Speedtest CLI already available"
 fi
 log_info "Installing yt-dlp..."
 if ! command -v yt-dlp >/dev/null 2>&1; then

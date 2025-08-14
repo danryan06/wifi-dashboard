@@ -122,8 +122,11 @@ run_interface_speedtest() {
             # Try official speedtest first, fall back to speedtest-cli
             local speedtest_cmd=""
             if command -v speedtest >/dev/null 2>&1; then
-                speedtest_cmd="speedtest --accept-license --accept-gdpr $bind_option --format=human-readable"
+                # Official Ookla Speedtest CLI
+                speedtest_cmd="speedtest --accept-license --accept-gdpr --format=human-readable"
+                [[ -n "$ip_addr" ]] && speedtest_cmd="$speedtest_cmd --interface-name=$INTERFACE"
             elif command -v speedtest-cli >/dev/null 2>&1; then
+                # Python-based speedtest-cli
                 speedtest_cmd="speedtest-cli"
                 [[ -n "$ip_addr" ]] && speedtest_cmd="$speedtest_cmd --source $ip_addr"
             else
