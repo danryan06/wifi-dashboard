@@ -10,6 +10,10 @@ log_error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; }
 
 log_info "Installing system dependencies..."
 
+# Set environment variables to prevent interactive prompts
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
 # Update package lists
 log_info "Updating package lists..."
 apt-get update -y
@@ -29,8 +33,6 @@ apt-get install -y \
     dos2unix \
     dnsutils \
     net-tools \
-    iperf3 \
-    tcpdump \
     speedtest-cli \
     youtube-dl \
     ffmpeg \
@@ -40,7 +42,10 @@ apt-get install -y \
     iftop \
     nethogs
 
-# Install yt-dlp (newer YouTube downloader)
+# Install potentially interactive packages separately with forced non-interactive mode
+log_info "Installing network testing tools..."
+echo 'iperf3 iperf3/start_daemon boolean false' | debconf-set-selections
+apt-get install -y iperf3 tcpdump
 log_info "Installing yt-dlp..."
 if ! command -v yt-dlp >/dev/null 2>&1; then
     pip3 install yt-dlp --break-system-packages >/dev/null 2>&1 || {
