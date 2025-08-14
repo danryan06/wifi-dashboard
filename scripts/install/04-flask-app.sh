@@ -371,3 +371,63 @@ def shutdown():
 if __name__ == "__main__":
     log_action("Wi-Fi Test Dashboard v5.0 starting")
     app.run(host="0.0.0.0", port=5000, debug=False)
+FLASK_APP_EOF
+
+# Ensure proper ownership
+chown "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/app.py"
+
+# Verify the Flask app can be imported
+if sudo -u "$PI_USER" python3 -c "import sys; sys.path.insert(0, '$PI_HOME/wifi_test_dashboard'); import app" 2>/dev/null; then
+    log_info "✓ Flask application verified successfully"
+else
+    log_info "⚠ Flask application verification had issues (may still work)"
+fi
+
+log_info "✓ Flask application installation completed"test', 'wifi-good', 'wifi-bad']:
+            flash("Invalid service", "error")
+            return redirect("/")
+        
+        if action not in ['start', 'stop', 'restart']:
+            flash("Invalid action", "error")
+            return redirect("/")
+        
+        result = subprocess.run(['sudo', 'systemctl', action, f'{service}.service'], 
+                              capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0:
+            log_action(f"Service {service} {action}ed via UI")
+            flash(f"Service {service} {action}ed successfully", "success")
+        else:
+            flash(f"Failed to {action} service {service}: {result.stderr}", "error")
+            
+    except Exception as e:
+        logger.error(f"Error with service action: {e}")
+        flash(f"Error performing service action: {e}", "error")
+    
+    return redirect("/")
+
+@app.route("/reboot", methods=["POST"])
+def reboot():
+    """Reboot system"""
+    try:
+        log_action("System reboot requested via UI")
+        subprocess.Popen(["sudo", "reboot"])
+        return jsonify({"success": True, "message": "System rebooting..."}), 200
+    except Exception as e:
+        logger.error(f"Error rebooting: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/shutdown", methods=["POST"])
+def shutdown():
+    """Shutdown system"""
+    try:
+        log_action("System shutdown requested via UI")
+        subprocess.Popen(["sudo", "poweroff"])
+        return jsonify({"success": True, "message": "System shutting down..."}), 200
+    except Exception as e:
+        logger.error(f"Error shutting down: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+if __name__ == "__main__":
+    log_action("Wi-Fi Test Dashboard v5.0 starting")
+    app.run(host="0.0.0.0", port=5000, debug=False)
