@@ -119,7 +119,20 @@ run_interface_speedtest() {
             local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -n1)
             [[ -n "$ip_addr" ]] && bind_option="--source=$ip_addr"
             
-            if timeout 120 speedtest --accept-license --accept-gdpr $bind_option --format=human-readable 2>&1 | tee -a "$LOG_FILE"; then
+            # Try official speedtest first, fall back to speedtest-cli
+            local speedtest_cmd=""
+            if command -v speedtest >/dev/null 2>&1; then
+                speedtest_cmd="speedtest --accept-license --accept-gdpr $bind_option --format=human-readable"
+            elif command -v speedtest-cli >/dev/null 2>&1; then
+                speedtest_cmd="speedtest-cli"
+                [[ -n "$ip_addr" ]] && speedtest_cmd="$speedtest_cmd --source $ip_addr"
+            else
+                log_msg "✗ No speedtest command available"
+                sleep $SPEEDTEST_INTERVAL
+                continue
+            fi
+            
+            if timeout 120 $speedtest_cmd 2>&1 | tee -a "$LOG_FILE"; then
                 log_msg "✓ Speedtest completed on $INTERFACE"
             else
                 log_msg "✗ Speedtest failed on $INTERFACE"
@@ -255,10 +268,13 @@ main_traffic_loop() {
     setup_interface_routing
     
     # Start background traffic generators based on type
+    local pids=()
+    
     case "$TRAFFIC_TYPE" in
         "speedtest"|"all")
             run_interface_speedtest &
             SPEEDTEST_PID=$!
+            pids+=($SPEEDTEST_PID)
             log_msg "Started speedtest generator (PID: $SPEEDTEST_PID)"
             ;;
     esac
@@ -267,6 +283,7 @@ main_traffic_loop() {
         "downloads"|"all")
             run_interface_downloads &
             DOWNLOAD_PID=$!
+            pids+=($DOWNLOAD_PID)
             log_msg "Started download generator (PID: $DOWNLOAD_PID)"
             ;;
     esac
@@ -276,6 +293,7 @@ main_traffic_loop() {
             if [[ "${ENABLE_YOUTUBE_TRAFFIC:-true}" == "true" ]]; then
                 run_youtube_traffic &
                 YOUTUBE_PID=$!
+                pids+=($YOUTUBE_PID)
                 log_msg "Started YouTube traffic generator (PID: $YOUTUBE_PID)"
             fi
             ;;
@@ -285,4 +303,72 @@ main_traffic_loop() {
         "ping"|"all")
             run_interface_ping_traffic &
             PING_PID=$!
-            log_msg "
+            pids+=($PING_PID)
+            log_msg "Started ping traffic generator (PID: $PING_PID)"
+            ;;
+    esac
+    
+    # If no specific traffic type matched, default to ping
+    if [[ ${#pids[@]} -eq 0 ]]; then
+        log_msg "No valid traffic type specified, starting ping traffic only"
+        run_interface_ping_traffic &
+        PING_PID=$!
+        pids+=($PING_PID)
+    fi
+    
+    # Wait for any child process to exit (shouldn't happen in normal operation)
+    wait -n
+    
+    # If we get here, something went wrong
+    log_msg "⚠ Traffic generator exited unexpectedly, cleaning up..."
+    cleanup_and_exit
+}
+
+# Cleanup function
+cleanup_and_exit() {
+    log_msg "Cleaning up traffic generation for $INTERFACE"
+    
+    # Kill all background processes
+    local all_pids=(${SPEEDTEST_PID:-} ${DOWNLOAD_PID:-} ${YOUTUBE_PID:-} ${PING_PID:-})
+    for pid in "${all_pids[@]}"; do
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            log_msg "Stopping process $pid"
+            kill "$pid" 2>/dev/null || true
+        fi
+    done
+    
+    # Clean up routing
+    cleanup_interface_routing
+    
+    log_msg "Traffic generation cleanup completed for $INTERFACE"
+    exit 0
+}
+
+# Signal handlers
+trap cleanup_and_exit SIGTERM SIGINT EXIT
+
+# Validate arguments
+if [[ ! "$TRAFFIC_TYPE" =~ ^(all|speedtest|downloads|youtube|ping)$ ]]; then
+    log_msg "✗ Invalid traffic type: $TRAFFIC_TYPE"
+    log_msg "Valid types: all, speedtest, downloads, youtube, ping"
+    exit 1
+fi
+
+if [[ ! "$INTENSITY" =~ ^(light|medium|heavy)$ ]]; then
+    log_msg "✗ Invalid intensity: $INTENSITY"
+    log_msg "Valid intensities: light, medium, heavy"
+    exit 1
+fi
+
+# Initial interface check
+if ! check_interface; then
+    log_msg "✗ Interface $INTERFACE is not ready, waiting 30 seconds..."
+    sleep 30
+    if ! check_interface; then
+        log_msg "✗ Interface $INTERFACE still not ready, exiting"
+        exit 1
+    fi
+fi
+
+# Start main traffic generation loop
+main_traffic_loop

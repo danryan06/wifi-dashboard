@@ -174,7 +174,7 @@ def traffic_status():
     """API endpoint for traffic generation status"""
     try:
         interfaces = ['eth0', 'wlan0', 'wlan1']
-        traffic_status = {}
+        traffic_status_data = {}
         
         for interface in interfaces:
             service_name = f"traffic-{interface}"
@@ -198,7 +198,7 @@ def traffic_status():
                 log_file = os.path.join(LOG_DIR, f"traffic-{interface}.log")
                 recent_logs = read_log_file(f"traffic-{interface}.log", 5) if os.path.exists(log_file) else []
                 
-                traffic_status[interface] = {
+                traffic_status_data[interface] = {
                     'service_status': status,
                     'ip_address': ip_info,
                     'recent_logs': recent_logs,
@@ -206,7 +206,7 @@ def traffic_status():
                 }
                 
             except Exception as e:
-                traffic_status[interface] = {
+                traffic_status_data[interface] = {
                     'service_status': f'error: {e}',
                     'ip_address': 'unknown',
                     'recent_logs': [],
@@ -214,3 +214,160 @@ def traffic_status():
                 }
         
         return jsonify({
+            "interfaces": traffic_status_data,
+            "success": True
+        })
+    except Exception as e:
+        logger.error(f"Error in traffic_status endpoint: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/traffic_action", methods=["POST"])
+def traffic_action():
+    """Start/stop/restart traffic generation services"""
+    try:
+        interface = request.form.get("interface")
+        action = request.form.get("action")
+        
+        if not interface or not action:
+            return jsonify({"success": False, "error": "Missing interface or action"}), 400
+        
+        if interface not in ['eth0', 'wlan0', 'wlan1']:
+            return jsonify({"success": False, "error": "Invalid interface"}), 400
+        
+        if action not in ['start', 'stop', 'restart']:
+            return jsonify({"success": False, "error": "Invalid action"}), 400
+        
+        service_name = f"traffic-{interface}"
+        result = subprocess.run(['sudo', 'systemctl', action, f'{service_name}.service'], 
+                              capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0:
+            log_action(f"Traffic service {service_name} {action}ed via UI")
+            return jsonify({"success": True, "message": f"Service {service_name} {action}ed successfully"})
+        else:
+            logger.error(f"Failed to {action} service {service_name}: {result.stderr}")
+            return jsonify({"success": False, "error": f"Failed to {action} service: {result.stderr}"}), 500
+            
+    except Exception as e:
+        logger.error(f"Error with traffic action: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/update_wifi", methods=["POST"])
+def update_wifi():
+    """Update Wi-Fi configuration"""
+    try:
+        new_ssid = request.form.get("ssid", "").strip()
+        new_password = request.form.get("password", "").strip()
+        
+        if not new_ssid or not new_password:
+            flash("Both SSID and password are required", "error")
+            return redirect("/")
+        
+        if write_config(new_ssid, new_password):
+            log_action(f"Wi-Fi config updated via UI: SSID={new_ssid}")
+            flash("Wi-Fi configuration updated successfully", "success")
+            
+            # Restart Wi-Fi services to pick up new config
+            try:
+                subprocess.run(['sudo', 'systemctl', 'restart', 'wifi-good.service'], timeout=10)
+                subprocess.run(['sudo', 'systemctl', 'restart', 'wifi-bad.service'], timeout=10)
+                flash("Wi-Fi services restarted", "info")
+            except Exception as e:
+                logger.error(f"Error restarting services: {e}")
+                flash("Configuration saved but failed to restart services", "warning")
+        else:
+            flash("Failed to update configuration", "error")
+            
+    except Exception as e:
+        logger.error(f"Error updating Wi-Fi config: {e}")
+        flash(f"Error updating configuration: {e}", "error")
+    
+    return redirect("/")
+
+@app.route("/set_netem", methods=["POST"])
+def set_netem():
+    """Configure network emulation"""
+    try:
+        latency = request.form.get("latency", "0")
+        loss = request.form.get("loss", "0")
+        
+        # Remove existing netem
+        subprocess.run(["sudo", "tc", "qdisc", "del", "dev", "wlan0", "root"], 
+                      stderr=subprocess.DEVNULL, timeout=10)
+        
+        cmd = ["sudo", "tc", "qdisc", "add", "dev", "wlan0", "root", "netem"]
+        
+        if int(latency) > 0:
+            cmd.extend(["delay", f"{latency}ms"])
+        if float(loss) > 0:
+            cmd.extend(["loss", f"{loss}%"])
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            log_action(f"Applied netem: latency={latency}ms, loss={loss}%")
+            flash(f"Network emulation applied: {latency}ms latency, {loss}% loss", "success")
+        else:
+            flash(f"Failed to apply network emulation: {result.stderr}", "error")
+            
+    except Exception as e:
+        logger.error(f"Error setting netem: {e}")
+        flash(f"Error configuring network emulation: {e}", "error")
+    
+    return redirect("/")
+
+@app.route("/service_action", methods=["POST"])
+def service_action():
+    """Start/stop/restart services"""
+    try:
+        service = request.form.get("service")
+        action = request.form.get("action")
+        
+        if service not in ['wired-test', 'wifi-good', 'wifi-bad']:
+            flash("Invalid service", "error")
+            return redirect("/")
+        
+        if action not in ['start', 'stop', 'restart']:
+            flash("Invalid action", "error")
+            return redirect("/")
+        
+        result = subprocess.run(['sudo', 'systemctl', action, f'{service}.service'], 
+                              capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0:
+            log_action(f"Service {service} {action}ed via UI")
+            flash(f"Service {service} {action}ed successfully", "success")
+        else:
+            flash(f"Failed to {action} service {service}: {result.stderr}", "error")
+            
+    except Exception as e:
+        logger.error(f"Error with service action: {e}")
+        flash(f"Error performing service action: {e}", "error")
+    
+    return redirect("/")
+
+@app.route("/reboot", methods=["POST"])
+def reboot():
+    """Reboot system"""
+    try:
+        log_action("System reboot requested via UI")
+        subprocess.Popen(["sudo", "reboot"])
+        return jsonify({"success": True, "message": "System rebooting..."}), 200
+    except Exception as e:
+        logger.error(f"Error rebooting: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/shutdown", methods=["POST"])
+def shutdown():
+    """Shutdown system"""
+    try:
+        log_action("System shutdown requested via UI")
+        subprocess.Popen(["sudo", "poweroff"])
+        return jsonify({"success": True, "message": "System shutting down..."}), 200
+    except Exception as e:
+        logger.error(f"Error shutting down: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+if __name__ == "__main__":
+    log_action("Wi-Fi Test Dashboard v5.0 starting")
+    app.run(host="0.0.0.0", port=5000, debug=False)

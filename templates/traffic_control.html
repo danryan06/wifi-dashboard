@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <title>Traffic Control - Wi-Fi Test Dashboard v5.0</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <style>
+        :root {
+            --bg: #0f1014;
+            --card: #1e2230;
+            --fg: #e8e8e8;
+            --muted: #777;
+            --accent: #4caf50;
+            --warning: #ff9800;
+            --error: #f44336;
+            --success: #4caf50;
+            --info: #2196f3;
+            --border: rgba(255,255,255,0.1);
+        }
+        
+        * { box-sizing: border-box; }
+        
+        body {
+            margin: 0; 
+            background: var(--bg); 
+            color: var(--fg);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; 
+            line-height: 1.5;
+        }
+        
+        .topbar {
+            display: flex; 
+            align-items: center; 
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border); 
+            background: rgba(0,0,0,0.2);
+        }
+        
+        .logo { 
+            font-weight: bold; 
+            font-size: 1.1em; 
+            margin-right: 24px; 
+            color: var(--accent);
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 16px;
+            flex: 1;
+        }
+        
+        .nav-link {
+            color: var(--muted);
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+        }
+        
+        .nav-link:hover, .nav-link.active {
+            color: var(--fg);
+            background: rgba(255,255,255,0.1);
+        }
+        
+        .status-pill {
+            padding: 6px 12px; 
+            border-radius: 999px; 
+            background: rgba(255,255,255,0.1);
+            font-size: 0.9em; 
+            margin-left: 16px;
+        }
+        
+        .content { 
+            padding: 20px; 
+            max-width: 1400px; 
+            margin: 0 auto; 
+        }
+        
+        .card {
+            background: var(--card); 
+            border-radius: 12px; 
+            padding: 24px; 
+            margin-bottom: 24px;
+            border: 1px solid var(--border); 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .card h2 { 
+            margin-top: 0; 
+            margin-bottom: 20px; 
+            color: var(--accent); 
+            font-size: 1.4em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .interface-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 24px;
+        }
+        
+        .interface-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--border);
+            transition: all 0.2s ease;
+        }
+        
+        .interface-card:hover {
+            background: rgba(255,255,255,0.08);
+            transform: translateY(-2px);
+        }
+        
+        .interface-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        
+        .interface-name {
+            font-size: 1.2em;
+            font-weight: 600;
+            color: var(--fg);
+        }
+        
+        .interface-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .interface-status.active {
+            background: var(--success);
+            color: white;
+        }
+        
+        .interface-status.inactive {
+            background: var(--error);
+            color: white;
+        }
+        
+        .interface-status.unknown {
+            background: var(--warning);
+            color: black;
+        }
+        
+        .interface-info {
+            margin-bottom: 16px;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+        
+        .info-label {
+            color: var(--muted);
+        }
+        
+        .info-value {
+            font-family: monospace;
+            color: var(--fg);
+        }
+        
+        .traffic-controls {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+        
+        .control-button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            background: var(--accent);
+            color: white;
+            cursor: pointer;
+            font-size: 0.85em;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        
+        .control-button:hover {
+            background: #45a049;
+        }
+        
+        .control-button.secondary {
+            background: #666;
+        }
+        
+        .control-button.secondary:hover {
+            background: #777;
+        }
+        
+        .control-button.danger {
+            background: var(--error);
+        }
+        
+        .control-button.danger:hover {
+            background: #d32f2f;
+        }
+        
+        .log-preview {
+            background: #0a0f1f;
+            border-radius: 8px;
+            padding: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 0.75em;
+            line-height: 1.4;
+            border: 1px solid var(--border);
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 12px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+        }
+        
+        .stat-value {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: var(--accent);
+        }
+        
+        .stat-label {
+            font-size: 0.8em;
+            color: var(--muted);
+            margin-top: 4px;
+        }
+        
+        .global-controls {
+            background: rgba(255,255,255,0.03);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+        
+        .control-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+        
+        .control-group {
+            background: rgba(255,255,255,0.05);
+            padding: 16px;
+            border-radius: 8px;
+        }
+        
+        .control-group h4 {
+            margin: 0 0 12px 0;
+            color: var(--accent);
+            font-size: 1em;
+        }
+        
+        .intensity-selector {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        
+        .intensity-btn {
+            padding: 6px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: transparent;
+            color: var(--muted);
+            cursor: pointer;
+            font-size: 0.8em;
+            transition: all 0.2s ease;
+        }
+        
+        .intensity-btn.active {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+        
+        .intensity-btn:hover {
+            border-color: var(--accent);
+        }
+        
+        .flash-messages { 
+            position: fixed; 
+            top: 20px; 
+            right: 20px; 
+            z-index: 1000; 
+            max-width: 400px; 
+        }
+        
+        .flash-message {
+            padding: 16px 20px; 
+            margin-bottom: 12px; 
+            border-radius: 8px; 
+            border-left: 4px solid;
+            background: rgba(0,0,0,0.95); 
+            color: white; 
+            animation: slideIn 0.3s ease;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        
+        .flash-message.success { border-left-color: var(--success); }
+        .flash-message.error { border-left-color: var(--error); }
+        .flash-message.warning { border-left-color: var(--warning); }
+        .flash-message.info { border-left-color: var(--info); }
+        
+        @keyframes slideIn { 
+            from { transform: translateX(100%); opacity: 0; } 
+            to { transform: translateX(0); opacity: 1; } 
+        }
+        
+        .spinner {
+            display: inline-block; 
+            width: 16px; 
+            height: 16px; 
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%; 
+            border-top-color: var(--accent); 
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin { 
+            to { transform: rotate(360deg); } 
+        }
+        
+        @media (max-width: 768px) {
+            .interface-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .control-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .content {
+                padding: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <div class="logo">🚦 Traffic Control</div>
+        <div class="nav-links">
+            <a href="/" class="nav-link">📊 Dashboard</a>
+            <a href="/traffic_control" class="nav-link active">🚦 Traffic Control</a>
+        </div>
+        <div class="status-pill" id="status-pill"><span class="spinner"></span> Loading...</div>
+    </div>
+
+    <div class="flash-messages" id="flash-messages"></div>
+
+    <div class="content">
+        <div class="card">
+            <h2>🚦 Traffic Generation Control</h2>
+            <p style="color: var(--muted); margin-bottom: 24px;">
+                Monitor and control traffic generation across all network interfaces. Each interface can run different types and intensities of traffic.
+            </p>
+            
+            <div class="global-controls">
+                <h3 style="margin: 0 0 16px 0; color: var(--accent);">🌐 Global Controls</h3>
+                <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                    <button onclick="startAllTraffic()" class="control-button">▶️ Start All Traffic</button>
+                    <button onclick="stopAllTraffic()" class="control-button danger">⏹️ Stop All Traffic</button>
+                    <button onclick="restartAllTraffic()" class="control-button secondary">🔄 Restart All Traffic</button>
+                    <button onclick="refreshStatus()" class="control-button secondary">🔄 Refresh Status</button>
+                </div>
+                
+                <div class="control-grid">
+                    <div class="control-group">
+                        <h4>📊 System Overview</h4>
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <div class="stat-value" id="active-interfaces">-</div>
+                                <div class="stat-label">Active Interfaces</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="running-services">-</div>
+                                <div class="stat-label">Running Services</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="total-traffic">-</div>
+                                <div class="stat-label">Traffic Types</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="control-group">
+                        <h4>⚙️ Quick Settings</h4>
+                        <div style="margin-bottom: 8px;">
+                            <label style="font-size: 0.9em; color: var(--muted);">Default Intensity:</label>
+                            <div class="intensity-selector">
+                                <button class="intensity-btn" onclick="setGlobalIntensity('light')">Light</button>
+                                <button class="intensity-btn active" onclick="setGlobalIntensity('medium')">Medium</button>
+                                <button class="intensity-btn" onclick="setGlobalIntensity('heavy')">Heavy</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🔌 Interface Traffic Status</h2>
+            <div class="interface-grid" id="interface-grid">
+                <div style="text-align: center; padding: 40px; color: var(--muted);">
+                    <span class="spinner"></span> Loading interface data...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let trafficData = {};
+        let refreshInterval;
+        
+        // Data refresh
+        async function refreshStatus() {
+            try {
+                const response = await fetch('/traffic_status');
+                if (!response.ok) throw new Error('Failed to fetch traffic status');
+                trafficData = await response.json();
+                updateUI(trafficData);
+                updateStatusPill('✅ Connected', 'var(--success)');
+            } catch (error) {
+                console.error('Error refreshing data:', error);
+                updateStatusPill('❌ Connection Error', 'var(--error)');
+            }
+        }
+        
+        function updateUI(data) {
+            updateGlobalStats(data);
+            updateInterfaceGrid(data);
+        }
+        
+        function updateGlobalStats(data) {
+            const interfaces = Object.keys(data.interfaces || {});
+            const activeInterfaces = interfaces.filter(iface => 
+                data.interfaces[iface]?.service_status === 'active'
+            ).length;
+            
+            const runningServices = Object.values(data.interfaces || {})
+                .filter(iface => iface.service_status === 'active').length;
+            
+            const totalTrafficTypes = interfaces.length * 4; // Assuming 4 traffic types per interface
+            
+            document.getElementById('active-interfaces').textContent = `${activeInterfaces}/${interfaces.length}`;
+            document.getElementById('running-services').textContent = runningServices;
+            document.getElementById('total-traffic').textContent = totalTrafficTypes;
+        }
+        
+        function updateInterfaceGrid(data) {
+            const container = document.getElementById('interface-grid');
+            const interfaces = data.interfaces || {};
+            
+            if (Object.keys(interfaces).length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 40px; color: var(--muted);">
+                        No traffic interfaces detected
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = Object.entries(interfaces).map(([iface, info]) => {
+                const status = info.service_status || 'unknown';
+                const statusClass = status === 'active' ? 'active' : 
+                                  status === 'inactive' ? 'inactive' : 'unknown';
+                
+                const recentLogs = (info.recent_logs || []).slice(-5).join('');
+                
+                return `
+                    <div class="interface-card">
+                        <div class="interface-header">
+                            <div class="interface-name">${iface.toUpperCase()}</div>
+                            <div class="interface-status ${statusClass}">${status}</div>
+                        </div>
+                        
+                        <div class="interface-info">
+                            <div class="info-row">
+                                <span class="info-label">IP Address:</span>
+                                <span class="info-value">${info.ip_address || 'Not assigned'}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Service:</span>
+                                <span class="info-value">traffic-${iface}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Log File:</span>
+                                <span class="info-value">${info.log_file_exists ? '✅ Available' : '❌ Missing'}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="traffic-controls">
+                            <button onclick="startTraffic('${iface}')" class="control-button">▶️ Start</button>
+                            <button onclick="stopTraffic('${iface}')" class="control-button danger">⏹️ Stop</button>
+                            <button onclick="restartTraffic('${iface}')" class="control-button secondary">🔄 Restart</button>
+                            <button onclick="viewLogs('${iface}')" class="control-button secondary">📋 Logs</button>
+                        </div>
+                        
+                        <div>
+                            <h5 style="margin: 16px 0 8px 0; color: var(--accent); font-size: 0.9em;">Recent Activity:</h5>
+                            <div class="log-preview">${recentLogs || 'No recent activity'}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function updateStatusPill(text, color) {
+            const pill = document.getElementById('status-pill');
+            pill.innerHTML = text;
+            pill.style.backgroundColor = color;
+        }
+        
+        // Traffic control functions
+        async function startTraffic(interface) {
+            await trafficAction(interface, 'start');
+        }
+        
+        async function stopTraffic(interface) {
+            await trafficAction(interface, 'stop');
+        }
+        
+        async function restartTraffic(interface) {
+            await trafficAction(interface, 'restart');
+        }
+        
+        async function trafficAction(interface, action) {
+            try {
+                const formData = new FormData();
+                formData.append('interface', interface);
+                formData.append('action', action);
+                
+                const response = await fetch('/traffic_action', { method: 'POST', body: formData });
+                
+                if (response.ok) {
+                    showMessage(`Traffic ${action}ed for ${interface}`, 'success');
+                    setTimeout(refreshStatus, 2000);
+                } else {
+                    showMessage(`Failed to ${action} traffic for ${interface}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, 'error');
+            }
+        }
+        
+        // Global traffic controls
+        async function startAllTraffic() {
+            if (!confirm('Start traffic generation on all interfaces?')) return;
+            
+            const interfaces = Object.keys(trafficData.interfaces || {});
+            for (const iface of interfaces) {
+                await startTraffic(iface);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            showMessage('All traffic services started', 'success');
+        }
+        
+        async function stopAllTraffic() {
+            if (!confirm('Stop all traffic generation?')) return;
+            
+            const interfaces = Object.keys(trafficData.interfaces || {});
+            for (const iface of interfaces) {
+                await stopTraffic(iface);
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            showMessage('All traffic services stopped', 'success');
+        }
+        
+        async function restartAllTraffic() {
+            if (!confirm('Restart all traffic generation services?')) return;
+            
+            const interfaces = Object.keys(trafficData.interfaces || {});
+            for (const iface of interfaces) {
+                await restartTraffic(iface);
+                await new Promise(resolve => setTimeout(resolve, 1500));
+            }
+            showMessage('All traffic services restarted', 'success');
+        }
+        
+        // Intensity control
+        function setGlobalIntensity(intensity) {
+            document.querySelectorAll('.intensity-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            showMessage(`Global intensity set to ${intensity}`, 'info');
+            // This would need backend implementation to actually change settings
+        }
+        
+        // Log viewing
+        function viewLogs(interface) {
+            // For now, just show a message - in a full implementation this might open a modal or new page
+            showMessage(`Viewing logs for ${interface} - check main dashboard logs tab`, 'info');
+        }
+        
+        // Utility functions
+        function showMessage(message, type = 'info') {
+            const container = document.getElementById('flash-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `flash-message ${type}`;
+            messageDiv.textContent = message;
+            container.appendChild(messageDiv);
+            setTimeout(() => {
+                if (messageDiv.parentNode) {
+                    messageDiv.parentNode.removeChild(messageDiv);
+                }
+            }, 5000);
+        }
+        
+        // Initialize
+        refreshStatus();
+        refreshInterval = setInterval(refreshStatus, 10000); // Refresh every 10 seconds
+    </script>
+</body>
+</html>
