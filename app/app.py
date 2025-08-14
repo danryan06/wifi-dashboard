@@ -463,4 +463,9 @@ def shutdown():
         subprocess.Popen(["sudo", "poweroff"])
         return jsonify({"success": True, "message": "System shutting down..."}), 200
     except Exception as e:
-        logger.error(
+        logger.error(f"Error shutting down: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+if __name__ == "__main__":
+    log_action("Wi-Fi Test Dashboard v5.0 starting")
+    app.run(host="0.0.0.0", port=5000, debug=False)
