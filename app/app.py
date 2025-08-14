@@ -47,10 +47,6 @@ def read_config():
         logger.error(f"Error shutting down: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-if __name__ == "__main__":
-    log_action("Wi-Fi Test Dashboard v5.0 with Throughput Monitoring starting")
-    app.run(host="0.0.0.0", port=5000, debug=False)
-
 def write_config(ssid, password):
     """Write SSID configuration"""
     try:
