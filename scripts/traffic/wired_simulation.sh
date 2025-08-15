@@ -7,8 +7,8 @@ set -euo pipefail
 INTERFACE="eth0"
 HOSTNAME="CNXNMist-Wired"
 CONNECTION_NAME="wired-cnxnmist"
-LOG_FILE="$HOME/wifi_test_dashboard/logs/wired.log"
-SETTINGS="$HOME/wifi_test_dashboard/configs/settings.conf"
+LOG_FILE="/home/pi/wifi_test_dashboard/logs/wired.log"
+SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
 
 # Source settings if available
 [[ -f "$SETTINGS" ]] && source "$SETTINGS" || true

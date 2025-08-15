@@ -6,9 +6,9 @@ set -euo pipefail
 
 INTERFACE="wlan0"
 HOSTNAME="CNXNMist-WiFiGood"
-LOG_FILE="$HOME/wifi_test_dashboard/logs/wifi-good.log"
-CONFIG_FILE="$HOME/wifi_test_dashboard/configs/ssid.conf"
-SETTINGS="$HOME/wifi_test_dashboard/configs/settings.conf"
+LOG_FILE="/home/pi/wifi_test_dashboard/logs/wifi-good.log"
+CONFIG_FILE="/home/pi/wifi_test_dashboard/configs/ssid.conf"
+SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
 
 # Source settings if available
 [[ -f "$SETTINGS" ]] && source "$SETTINGS" || true

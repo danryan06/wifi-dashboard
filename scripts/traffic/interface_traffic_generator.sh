@@ -8,8 +8,8 @@ INTERFACE="${1:-eth0}"
 TRAFFIC_TYPE="${2:-all}"
 INTENSITY="${3:-medium}"
 
-LOG_FILE="$HOME/wifi_test_dashboard/logs/traffic-${INTERFACE}.log"
-SETTINGS="$HOME/wifi_test_dashboard/configs/settings.conf"
+LOG_FILE="/home/pi/wifi_test_dashboard/logs/traffic-${INTERFACE}.log"
+SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
 
 # Source settings if available
 [[ -f "$SETTINGS" ]] && source "$SETTINGS"
