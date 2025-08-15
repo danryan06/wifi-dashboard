@@ -6,7 +6,7 @@ set -euo pipefail
 
 INTERFACE="wlan1"
 HOSTNAME="CNXNMist-WiFiBad"
-LOG_FILE="/home/piwifi_test_dashboard/logs/wifi-bad.log"
+LOG_FILE="/home/pi/wifi_test_dashboard/logs/wifi-bad.log"
 CONFIG_FILE="/home/pi/wifi_test_dashboard/configs/ssid.conf"
 SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
 
