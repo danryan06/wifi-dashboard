@@ -560,6 +560,199 @@
             border-radius: 3px;
             transition: width 0.3s ease;
         }
+
+        /* Interface Assignment Styles */
+        .interface-assignment-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        .interface-assignment-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--border);
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .interface-assignment-card:hover {
+            background: rgba(255,255,255,0.08);
+            transform: translateY(-2px);
+        }
+
+        .interface-assignment-card.good-client {
+            border-left: 4px solid var(--success);
+        }
+
+        .interface-assignment-card.bad-client {
+            border-left: 4px solid var(--warning);
+        }
+
+        .interface-assignment-card.wired-client {
+            border-left: 4px solid var(--info);
+        }
+
+        .interface-assignment-card.unassigned {
+            border-left: 4px solid var(--muted);
+            opacity: 0.7;
+        }
+
+        .interface-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .interface-assignment-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75em;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .assignment-good {
+            background: var(--success);
+            color: white;
+        }
+
+        .assignment-bad {
+            background: var(--warning);
+            color: black;
+        }
+
+        .assignment-wired {
+            background: var(--info);
+            color: white;
+        }
+
+        .assignment-unassigned {
+            background: var(--muted);
+            color: white;
+        }
+
+        .interface-details {
+            margin-bottom: 16px;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+
+        .detail-label {
+            color: var(--muted);
+            font-weight: 500;
+        }
+
+        .detail-value {
+            color: var(--fg);
+            font-family: monospace;
+        }
+
+        .capability-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 12px;
+        }
+
+        .capability-tag {
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.7em;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .tag-builtin {
+            background: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+
+        .tag-dual-band {
+            background: rgba(33, 150, 243, 0.2);
+            color: var(--info);
+        }
+
+        .tag-usb {
+            background: rgba(255, 152, 0, 0.2);
+            color: var(--warning);
+        }
+
+        .tag-2ghz {
+            background: rgba(158, 158, 158, 0.2);
+            color: var(--muted);
+        }
+
+        .tag-ethernet {
+            background: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+
+        .wireless-connection-info {
+            background: rgba(255,255,255,0.03);
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 12px;
+            border: 1px dashed var(--border);
+        }
+
+        .connection-info-title {
+            font-size: 0.8em;
+            color: var(--muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .optimization-recommendations {
+            background: rgba(76, 175, 80, 0.1);
+            border-left: 4px solid var(--success);
+            padding: 16px;
+            border-radius: 8px;
+            margin-top: 16px;
+        }
+
+        .optimization-title {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: var(--success);
+            margin-bottom: 12px;
+        }
+
+        .recommendation-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .recommendation-list li {
+            padding: 4px 0;
+            color: var(--fg);
+        }
+
+        .recommendation-list li:before {
+            content: "✓ ";
+            color: var(--success);
+            font-weight: bold;
+        }
+
+        .auto-detection-info {
+            background: rgba(33, 150, 243, 0.1);
+            border-left: 4px solid var(--info);
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
     </style>
 </head>
 <body>
@@ -571,6 +764,7 @@
         </div>
         <div class="tabs">
             <div class="tab active" data-tab="status">📊 Status</div>
+            <div class="tab" data-tab="interfaces">🔌 Interfaces</div>
             <div class="tab" data-tab="wifi">📶 Wi-Fi Config</div>
             <div class="tab" data-tab="netem">🌐 Network Emulation</div>
             <div class="tab" data-tab="services">⚙️ Services</div>
@@ -632,6 +826,24 @@
                     <h3>Network Emulation Status</h3>
                     <pre id="netem-status">Loading...</pre>
                 </div>
+            </div>
+        </div>
+
+        <!-- Interface Assignments Tab -->
+        <div id="interfaces" class="card hidden">
+            <h2>🔌 Interface Assignments</h2>
+            <p style="color: var(--muted); margin-bottom: 24px;">
+                Intelligent interface detection and assignment for optimal performance.
+            </p>
+            
+            <div class="interface-assignment-grid" id="interface-assignment-grid">
+                <div style="text-align: center; padding: 40px; color: var(--muted);">
+                    <span class="spinner"></span> Loading interface assignments...
+                </div>
+            </div>
+            
+            <div class="optimization-info" id="optimization-info" style="margin-top: 24px;">
+                <!-- Optimization recommendations will be loaded here -->
             </div>
         </div>
 
@@ -735,10 +947,15 @@
         function switchTab(tabName) {
             document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
             document.querySelector(`[data-tab="${tabName}"]`).classList.add("active");
-            const sections = ["status", "wifi", "netem", "services", "logs", "controls"];
+            const sections = ["status", "interfaces", "wifi", "netem", "services", "logs", "controls"];
             sections.forEach(section => {
                 document.getElementById(section).classList.toggle("hidden", section !== tabName);
             });
+            
+            // Load interface data when interfaces tab is opened
+            if (tabName === 'interfaces') {
+                updateInterfaceAssignments();
+            }
         }
         
         // Log tab switching
@@ -772,6 +989,10 @@
                 if (!response.ok) throw new Error('Failed to fetch status');
                 currentData = await response.json();
                 updateUI(currentData);
+                
+                // Add throughput update here
+                await updateThroughputStats();
+                
                 updateStatusPill('✅ Connected', 'var(--success)');
             } catch (error) {
                 console.error('Error refreshing data:', error);
@@ -792,9 +1013,6 @@
             
             // Update network interfaces (filter out loopback)
             updateNetworkInterfaces(data.system_info?.interfaces || {});
-            
-            // Update throughput statistics
-            updateThroughputStats();
             
             // Update text areas
             document.getElementById('active-connections').textContent = data.system_info?.active_connections || 'Unknown';
@@ -857,105 +1075,73 @@
             }).join('');
         }
         
-        // Throughput monitoring functions
+        // Real-time throughput monitoring functions
         async function updateThroughputStats() {
             try {
                 const response = await fetch('/api/throughput');
                 if (response.ok) {
-                    const stats = await response.json();
-                    updateThroughputDisplay(stats);
+                    const data = await response.json();
+                    if (data.success && data.throughput) {
+                        updateThroughputDisplay(data.throughput);
+                    } else {
+                        console.log('Throughput API returned unsuccessful response');
+                        showFallbackThroughput();
+                    }
                 } else {
-                    // Fallback: calculate from /proc/net/dev if API not available
-                    calculateThroughputFromProcNet();
+                    console.log('Throughput API not available, response:', response.status);
+                    showFallbackThroughput();
                 }
             } catch (error) {
-                console.log('Throughput API not available, using fallback');
-                calculateThroughputFromProcNet();
+                console.log('Throughput API error:', error);
+                showFallbackThroughput();
             }
         }
-        
-        async function calculateThroughputFromProcNet() {
-            // This is a fallback method - we'll simulate throughput data
-            // In a real implementation, this would parse /proc/net/dev
-            const interfaces = ['eth0', 'wlan0', 'wlan1'];
-            const currentStats = {};
-            
-            // Get current timestamp
-            const now = Date.now();
-            
-            // Simulate network stats (in a real implementation, fetch from system)
-            interfaces.forEach(iface => {
-                // Simulate some traffic based on service status
-                const isActive = currentData.service_status?.[`traffic-${iface}`] === 'active' ||
-                                currentData.service_status?.[iface.replace('0', '').replace('1', '') + '-test'] === 'active';
-                
-                const baseTraffic = isActive ? Math.random() * 10 + 5 : Math.random() * 0.5;
-                const multiplier = iface === 'wlan0' ? 2.5 : iface === 'eth0' ? 1.5 : 0.3; // Higher for Wi-Fi good client
-                
-                currentStats[iface] = {
-                    rx_bytes: Math.floor(baseTraffic * multiplier * 1024 * 1024), // Convert to bytes
-                    tx_bytes: Math.floor(baseTraffic * multiplier * 0.8 * 1024 * 1024),
-                    timestamp: now
-                };
-            });
-            
-            // Calculate rates if we have previous data
-            const throughputStats = {};
-            Object.keys(currentStats).forEach(iface => {
-                const current = currentStats[iface];
-                const previous = previousStats[iface];
-                
-                if (previous && current.timestamp > previous.timestamp) {
-                    const timeDiff = (current.timestamp - previous.timestamp) / 1000; // seconds
-                    const rxRate = (current.rx_bytes - previous.rx_bytes) / timeDiff; // bytes/sec
-                    const txRate = (current.tx_bytes - previous.tx_bytes) / timeDiff; // bytes/sec
-                    
-                    throughputStats[iface] = {
-                        download: Math.max(0, rxRate),
-                        upload: Math.max(0, txRate),
-                        active: currentData.service_status?.[`traffic-${iface}`] === 'active'
-                    };
-                } else {
-                    throughputStats[iface] = {
-                        download: 0,
-                        upload: 0,
-                        active: false
-                    };
-                }
-            });
-            
-            previousStats = currentStats;
-            updateThroughputDisplay(throughputStats);
-        }
-        
-        function updateThroughputDisplay(stats) {
+
+        function updateThroughputDisplay(throughputData) {
             const container = document.getElementById('throughput-grid');
-            if (!stats || Object.keys(stats).length === 0) {
+            if (!throughputData || Object.keys(throughputData).length === 0) {
                 container.innerHTML = '<div class="throughput-item">No throughput data available</div>';
                 return;
             }
             
-            // Filter to only show interfaces that exist
-            const interfaces = Object.keys(stats).filter(iface => 
-                iface !== 'lo' && !iface.includes('loopback')
+            // Filter to show only relevant interfaces (exclude wlan2 if inactive)
+            const interfaces = Object.keys(throughputData).filter(iface => 
+                iface !== 'lo' && !iface.includes('loopback') && 
+                (throughputData[iface].active || throughputData[iface].download > 0 || throughputData[iface].upload > 0)
             );
             
+            if (interfaces.length === 0) {
+                container.innerHTML = '<div class="throughput-item">No active network interfaces detected</div>';
+                return;
+            }
+            
             container.innerHTML = interfaces.map(iface => {
-                const stat = stats[iface] || { download: 0, upload: 0, active: false };
-                const downloadMbps = (stat.download * 8 / 1024 / 1024).toFixed(2); // Convert bytes/sec to Mbps
-                const uploadMbps = (stat.upload * 8 / 1024 / 1024).toFixed(2);
+                const stats = throughputData[iface];
                 
-                // Calculate bar width (max 100 Mbps scale)
+                // Convert bytes/sec to Mbps (download/upload are in bytes/sec from your API)
+                const downloadMbps = (stats.download * 8 / 1024 / 1024).toFixed(2);
+                const uploadMbps = (stats.upload * 8 / 1024 / 1024).toFixed(2);
+                
+                // Calculate bar width (scale to 100 Mbps max)
                 const maxMbps = 100;
                 const downloadPercent = Math.min((downloadMbps / maxMbps) * 100, 100);
                 const uploadPercent = Math.min((uploadMbps / maxMbps) * 100, 100);
                 
+                // Get friendly interface names
+                const interfaceNames = {
+                    'eth0': 'Ethernet',
+                    'wlan0': 'Wi-Fi Primary (Good Client)',
+                    'wlan1': 'Wi-Fi Secondary (Bad Client)',
+                    'wlan2': 'Wi-Fi Tertiary'
+                };
+                const displayName = interfaceNames[iface] || iface.toUpperCase();
+                
                 return `
                     <div class="throughput-item">
                         <div class="throughput-header">
-                            <div class="throughput-interface">${iface.toUpperCase()}</div>
-                            <div class="throughput-status ${stat.active ? 'active' : 'inactive'}">
-                                ${stat.active ? 'ACTIVE' : 'IDLE'}
+                            <div class="throughput-interface">${displayName}</div>
+                            <div class="throughput-status ${stats.active ? 'active' : 'inactive'}">
+                                ${stats.active ? 'ACTIVE' : 'IDLE'}
                             </div>
                         </div>
                         <div class="throughput-metrics">
@@ -974,9 +1160,28 @@
                                 </div>
                             </div>
                         </div>
+                        <div style="margin-top: 12px; font-size: 0.8em; color: var(--muted);">
+                            📦 RX: ${stats.rx_packets || 0} packets | TX: ${stats.tx_packets || 0} packets
+                        </div>
                     </div>
                 `;
             }).join('');
+        }
+
+        function showFallbackThroughput() {
+            const container = document.getElementById('throughput-grid');
+            container.innerHTML = `
+                <div class="throughput-item">
+                    <div class="throughput-header">
+                        <div class="throughput-interface">Throughput Monitoring</div>
+                        <div class="throughput-status inactive">UNAVAILABLE</div>
+                    </div>
+                    <div style="text-align: center; color: var(--muted); padding: 20px;">
+                        Real-time throughput monitoring is currently unavailable.<br>
+                        Check that the /api/throughput endpoint is working.
+                    </div>
+                </div>
+            `;
         }
         
         function updateStatusPill(text, color) {
@@ -1008,6 +1213,196 @@
                     </div>
                 `;
             }).join('');
+        }
+
+        // Interface Assignment Functions
+        async function updateInterfaceAssignments() {
+            try {
+                const response = await fetch('/api/interfaces');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        displayInterfaceAssignments(data);
+                    } else {
+                        showInterfaceError('Failed to load interface data');
+                    }
+                } else {
+                    showInterfaceError('Interface API not available');
+                }
+            } catch (error) {
+                console.error('Error loading interface assignments:', error);
+                showInterfaceError('Error loading interface assignments');
+            }
+        }
+
+        function displayInterfaceAssignments(data) {
+            const container = document.getElementById('interface-assignment-grid');
+            const optimizationContainer = document.getElementById('optimization-info');
+            
+            if (!data.interfaces || Object.keys(data.interfaces).length === 0) {
+                container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--muted);">No network interfaces detected</div>';
+                return;
+            }
+            
+            // Show auto-detection info
+            if (data.auto_detected) {
+                optimizationContainer.innerHTML = `
+                    <div class="auto-detection-info">
+                        <div style="font-weight: 600; margin-bottom: 8px;">🤖 Automatic Interface Detection</div>
+                        <div>Interfaces were automatically detected and optimally assigned based on capabilities and hardware type.</div>
+                    </div>
+                `;
+            }
+            
+            // Sort interfaces by assignment priority
+            const sortedInterfaces = Object.entries(data.interfaces).sort(([,a], [,b]) => {
+                const priority = { 'good_client': 3, 'bad_client': 2, 'wired_client': 1, 'unassigned': 0 };
+                return (priority[b.assignment] || 0) - (priority[a.assignment] || 0);
+            });
+            
+            container.innerHTML = sortedInterfaces.map(([iface, info]) => {
+                const assignmentClass = info.assignment.replace('_', '-');
+                const assignmentName = info.assignment.replace('_', ' ').toUpperCase();
+                
+                // Generate capability tags
+                const capabilityTags = (info.capabilities || []).map(cap => {
+                    const tagClass = cap.replace('_', '-');
+                    const tagText = cap.replace('_', ' ').toUpperCase();
+                    return `<span class="capability-tag tag-${tagClass}">${tagText}</span>`;
+                }).join('');
+                
+                // Wireless connection info
+                let connectionInfo = '';
+                if (info.wireless_info && Object.keys(info.wireless_info).length > 0) {
+                    const { ssid, signal, frequency } = info.wireless_info;
+                    if (ssid) {
+                        connectionInfo = `
+                            <div class="wireless-connection-info">
+                                <div class="connection-info-title">Current Connection</div>
+                                <div class="detail-row">
+                                    <span class="detail-label">SSID:</span>
+                                    <span class="detail-value">${ssid}</span>
+                                </div>
+                                ${signal ? `
+                                <div class="detail-row">
+                                    <span class="detail-label">Signal:</span>
+                                    <span class="detail-value">${signal}%</span>
+                                </div>` : ''}
+                                ${frequency ? `
+                                <div class="detail-row">
+                                    <span class="detail-label">Frequency:</span>
+                                    <span class="detail-value">${frequency}</span>
+                                </div>` : ''}
+                            </div>
+                        `;
+                    }
+                }
+                
+                return `
+                    <div class="interface-assignment-card ${assignmentClass}">
+                        <div class="interface-header">
+                            <div class="interface-name">${iface.toUpperCase()}</div>
+                            <div class="interface-assignment-badge assignment-${assignmentClass.replace('-client', '')}">${assignmentName}</div>
+                        </div>
+                        
+                        <div class="interface-details">
+                            <div class="detail-row">
+                                <span class="detail-label">Type:</span>
+                                <span class="detail-value">${info.type}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">State:</span>
+                                <span class="detail-value">${info.state}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">IP Address:</span>
+                                <span class="detail-value">${info.ip_address || 'Not assigned'}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Assignment:</span>
+                                <span class="detail-value">${info.description}</span>
+                            </div>
+                        </div>
+                        
+                        ${capabilityTags ? `
+                        <div class="capability-tags">
+                            ${capabilityTags}
+                        </div>` : ''}
+                        
+                        ${connectionInfo}
+                    </div>
+                `;
+            }).join('');
+            
+            // Add optimization recommendations
+            generateOptimizationRecommendations(data, optimizationContainer);
+        }
+
+        function generateOptimizationRecommendations(data, container) {
+            const interfaces = data.interfaces;
+            const recommendations = [];
+            
+            // Find good client interface
+            const goodClient = Object.entries(interfaces).find(([,info]) => info.assignment === 'good_client');
+            if (goodClient) {
+                const [iface, info] = goodClient;
+                
+                if (info.capabilities && info.capabilities.includes('dual_band')) {
+                    recommendations.push('Built-in dual-band adapter assigned to good client for optimal 5GHz performance');
+                }
+                
+                if (info.capabilities && info.capabilities.includes('builtin')) {
+                    recommendations.push('Built-in adapter provides better antenna positioning and reliability');
+                }
+                
+                if (info.state === 'UP' && info.ip_address) {
+                    recommendations.push(`Good client (${iface}) is connected and ready for traffic generation`);
+                }
+            }
+            
+            // Check bad client
+            const badClient = Object.entries(interfaces).find(([,info]) => info.assignment === 'bad_client');
+            if (badClient) {
+                const [iface, info] = badClient;
+                recommendations.push(`Bad client (${iface}) will generate authentication failures for security testing`);
+                
+                if (info.capabilities && info.capabilities.includes('usb')) {
+                    recommendations.push('USB adapter used for bad client to isolate authentication failures');
+                }
+            } else {
+                recommendations.push('Consider adding a USB Wi-Fi adapter for bad client simulation');
+            }
+            
+            // Check for dual-band capability
+            const dualBandInterfaces = Object.entries(interfaces).filter(([,info]) => 
+                info.capabilities && info.capabilities.includes('dual_band')
+            );
+            
+            if (dualBandInterfaces.length > 0) {
+                recommendations.push('5GHz bands available for reduced interference and better performance');
+            }
+            
+            if (recommendations.length > 0) {
+                const optimizationHtml = `
+                    <div class="optimization-recommendations">
+                        <div class="optimization-title">🚀 Optimization Benefits</div>
+                        <ul class="recommendation-list">
+                            ${recommendations.map(rec => `<li>${rec}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+                
+                container.innerHTML += optimizationHtml;
+            }
+        }
+
+        function showInterfaceError(message) {
+            const container = document.getElementById('interface-assignment-grid');
+            container.innerHTML = `
+                <div style="text-align: center; padding: 40px; color: var(--error);">
+                    ⚠️ ${message}
+                </div>
+            `;
         }
         
         // Service actions
