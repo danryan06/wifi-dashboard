@@ -72,11 +72,11 @@ check_wifi_interface() {
     # Ensure NetworkManager manages this interface
     if ! nmcli device show "$INTERFACE" >/dev/null 2>&1; then
         log_msg "Setting $INTERFACE to managed mode"
-        sudo nmcli device set "$INTERFACE" managed yes || true
+        sudo nmcli device set "$INTERFACE" managed yes 2>/dev/null || true
         sleep 2
     fi
     
-    local state=$(nmcli device show "$INTERFACE" | grep 'GENERAL.STATE' | awk '{print $2}')
+    local state=$(nmcli device show "$INTERFACE" | grep 'GENERAL.STATE' | awk '{print $2}' 2>/dev/null || echo "unknown")
     log_msg "Interface $INTERFACE state: $state"
     
     return 0
@@ -93,12 +93,40 @@ scan_for_ssid() {
     sleep 3
     
     # Check if our target SSID is visible
-    if nmcli device wifi list ifname "$INTERFACE" | grep -q "$target_ssid"; then
+    if nmcli device wifi list ifname "$INTERFACE" 2>/dev/null | grep -q "$target_ssid"; then
         log_msg "✓ Target SSID '$target_ssid' is visible"
         return 0
     else
         log_msg "✗ Target SSID '$target_ssid' not found in scan"
         return 1
+    fi
+}
+
+# Force disconnect with better error handling
+force_disconnect() {
+    log_msg "Forcing disconnect on $INTERFACE"
+    
+    # Try multiple disconnect methods
+    nmcli device disconnect "$INTERFACE" 2>/dev/null || true
+    nmcli connection down id "$INTERFACE" 2>/dev/null || true
+    
+    # Wait a moment for disconnect to complete
+    sleep 2
+    
+    # Verify we're disconnected
+    local current_ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | grep '^yes' | cut -d':' -f2 || echo "")
+    if [[ -n "$current_ssid" ]]; then
+        log_msg "⚠ Still connected to: $current_ssid - attempting stronger disconnect"
+        
+        # More aggressive disconnect
+        sudo nmcli radio wifi off 2>/dev/null || true
+        sleep 2
+        sudo nmcli radio wifi on 2>/dev/null || true
+        sleep 3
+        
+        log_msg "Radio reset completed"
+    else
+        log_msg "✓ Successfully disconnected"
     fi
 }
 
@@ -108,7 +136,10 @@ attempt_bad_connection() {
     local wrong_password="$2"
     local connection_name="wifi-bad-$RANDOM"
     
-    log_msg "Attempting connection with wrong password: $wrong_password"
+    log_msg "Attempting connection with wrong password: ***${wrong_password: -3}"
+    
+    # Ensure we start disconnected
+    force_disconnect
     
     # Create temporary connection with wrong password
     if nmcli connection add \
@@ -135,18 +166,49 @@ attempt_bad_connection() {
     # Attempt to connect (this should fail due to wrong password)
     log_msg "Attempting connection to $ssid (expected to fail)..."
     
-    local connection_result=0
-    if timeout "$CONNECTION_TIMEOUT" nmcli connection up "$connection_name" 2>/dev/null; then
-        log_msg "🚨 UNEXPECTED: Connection succeeded with wrong password!"
-        log_msg "This indicates a security issue with the target network"
-        connection_result=0
+    local connection_result=1
+    local connection_output=""
+    
+    # Capture both success/failure and any output
+    if connection_output=$(timeout "$CONNECTION_TIMEOUT" nmcli connection up "$connection_name" 2>&1); then
+        log_msg "🚨 SECURITY ALERT: Connection succeeded with wrong password!"
+        log_msg "🚨 SSID '$ssid' accepted password: ***${wrong_password: -3}"
+        log_msg "🚨 This indicates a serious security vulnerability!"
+        log_msg "🚨 Network may have no password or weak security"
+        
+        # Log connection details for security analysis
+        local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1 2>/dev/null || echo "unknown")
+        log_msg "🚨 Obtained IP address: $ip_addr"
+        
+        # Check what security we actually connected with
+        local security_info=$(nmcli -t -f SECURITY dev wifi | head -n1 2>/dev/null || echo "unknown")
+        log_msg "🚨 Network security detected as: $security_info"
+        
+        # IMMEDIATE FORCED DISCONNECT - we should not remain connected
+        log_msg "🚨 Forcing immediate disconnect due to security concern"
+        force_disconnect
+        
+        # Additional logging for forensics
+        log_msg "🚨 Connection attempt details: $connection_output"
+        
+        connection_result=0  # Unexpected success
     else
-        log_msg "✓ Connection failed as expected (authentication failure)"
-        connection_result=1
+        # Parse the failure reason
+        if echo "$connection_output" | grep -qi "authentication\|password\|key"; then
+            log_msg "✓ Connection failed as expected (authentication failure)"
+        elif echo "$connection_output" | grep -qi "timeout"; then
+            log_msg "✓ Connection timed out (likely auth failure)"
+        else
+            log_msg "✓ Connection failed: $(echo "$connection_output" | head -n1)"
+        fi
+        connection_result=1  # Expected failure
     fi
     
     # Clean up the connection profile
     nmcli connection delete "$connection_name" 2>/dev/null || true
+    
+    # Ensure we're disconnected after attempt
+    force_disconnect
     
     return $connection_result
 }
@@ -161,7 +223,7 @@ generate_auth_failure_patterns() {
     for i in {1..3}; do
         local bad_pwd=${BAD_PASSWORDS[$((RANDOM % ${#BAD_PASSWORDS[@]}))]}
         attempt_bad_connection "$ssid" "$bad_pwd"
-        ((pattern_count++))
+        ((++pattern_count))
         sleep 2
     done
     
@@ -171,7 +233,7 @@ generate_auth_failure_patterns() {
     for base in "${base_passwords[@]}"; do
         for suffix in "123" "1" ""; do
             attempt_bad_connection "$ssid" "${base}${suffix}"
-            ((pattern_count++))
+            ((++pattern_count))
             sleep 3
         done
     done
@@ -181,7 +243,7 @@ generate_auth_failure_patterns() {
     local brute_passwords=("12345678" "qwerty123" "letmein" "hackme")
     for pwd in "${brute_passwords[@]}"; do
         attempt_bad_connection "$ssid" "$pwd"
-        ((pattern_count++))
+        ((++pattern_count))
         sleep 5  # Slower for brute force pattern
     done
     
@@ -193,8 +255,8 @@ generate_auth_failure_patterns() {
 simulate_attack_patterns() {
     local ssid="$1"
     
-    # Disconnect any existing connections
-    nmcli device disconnect "$INTERFACE" 2>/dev/null || true
+    # Ensure clean start
+    force_disconnect
     sleep 2
     
     log_msg "Starting attack pattern simulation against: $ssid"
@@ -244,19 +306,24 @@ simulate_attack_patterns() {
 # Monitor and log wireless events
 monitor_wireless_events() {
     # Check for any successful connections (shouldn't happen)
-    local current_ssid=$(nmcli -t -f active,ssid dev wifi | grep '^yes' | cut -d':' -f2)
+    local current_ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | grep '^yes' | cut -d':' -f2 || echo "")
     
     if [[ -n "$current_ssid" ]]; then
         if [[ "$current_ssid" == "$SSID" ]]; then
-            log_msg "🚨 WARNING: Successfully connected to target SSID!"
-            log_msg "This indicates the authentication failure simulation failed"
+            log_msg "🚨 CRITICAL: Successfully connected to target SSID!"
+            log_msg "🚨 This indicates the authentication failure simulation failed"
+            log_msg "🚨 Target network may have serious security issues"
             
-            # Disconnect immediately
-            nmcli device disconnect "$INTERFACE"
-            log_msg "Disconnected from unexpected successful connection"
+            # Get more details about this concerning connection
+            local connection_details=$(nmcli -t -f SSID,SECURITY,SIGNAL,FREQ dev wifi | grep "$current_ssid" | head -n1)
+            log_msg "🚨 Connection details: $connection_details"
+            
+            # Force immediate disconnect
+            log_msg "🚨 FORCING IMMEDIATE DISCONNECT"
+            force_disconnect
         else
             log_msg "Connected to different SSID: $current_ssid (disconnecting)"
-            nmcli device disconnect "$INTERFACE"
+            force_disconnect
         fi
     fi
     
@@ -299,6 +366,9 @@ simulate_deauth_attempts() {
         
         sleep $((RANDOM % 3 + 2))
     done
+    
+    # Final cleanup
+    force_disconnect
 }
 
 # Main bad client loop
@@ -311,7 +381,7 @@ main_loop() {
     
     while true; do
         local current_time=$(date +%s)
-        ((cycle_count++))
+        ((++cycle_count))  # Fixed syntax
         
         log_msg "=== Bad Client Cycle $cycle_count ==="
         
@@ -366,7 +436,7 @@ main_loop() {
         fi
         
         # Ensure we're disconnected before next cycle
-        nmcli device disconnect "$INTERFACE" 2>/dev/null || true
+        force_disconnect
         
         log_msg "Bad client cycle $cycle_count completed, waiting $REFRESH_INTERVAL seconds"
         sleep $REFRESH_INTERVAL
@@ -377,11 +447,11 @@ main_loop() {
 cleanup_and_exit() {
     log_msg "Cleaning up Wi-Fi bad client simulation..."
     
-    # Disconnect and clean up any remaining connections
-    nmcli device disconnect "$INTERFACE" 2>/dev/null || true
+    # Force disconnect with comprehensive cleanup
+    force_disconnect
     
     # Remove any temporary connections we may have created
-    nmcli connection show | grep "wifi-bad-" | awk '{print $1}' | while read -r conn; do
+    nmcli connection show 2>/dev/null | grep "wifi-bad-\|deauth-test-" | awk '{print $1}' | while read -r conn; do
         nmcli connection delete "$conn" 2>/dev/null || true
     done
     
@@ -397,12 +467,25 @@ log_msg "Wi-Fi Bad Client Simulation Starting..."
 log_msg "Purpose: Generate authentication failures for security testing"
 log_msg "Target interface: $INTERFACE"
 log_msg "Hostname: $HOSTNAME"
+log_msg "Config file: $CONFIG_FILE"
+log_msg "Log file: $LOG_FILE"
+
+# Ensure log directory exists
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
 # Initial config read
 if ! read_wifi_config; then
     log_msg "✗ Failed to read initial configuration"
     log_msg "Will use default wrong passwords against any available SSIDs"
     SSID="TestNetwork"  # Default for testing
+fi
+
+# Initial interface check and cleanup
+if check_wifi_interface; then
+    force_disconnect  # Start clean
+    log_msg "✓ Interface $INTERFACE ready for bad client simulation"
+else
+    log_msg "⚠ Interface $INTERFACE not ready, but continuing anyway"
 fi
 
 # Start main loop
