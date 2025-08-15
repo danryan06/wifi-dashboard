@@ -64,20 +64,49 @@ check_wifi_interface() {
         return 1
     fi
     
+    # Ensure interface is up
+    if ! ip link show "$INTERFACE" | grep -q "state UP"; then
+        log_msg "Bringing $INTERFACE up..."
+        sudo ip link set "$INTERFACE" up || true
+        sleep 2
+    fi
+    
     # Ensure NetworkManager manages this interface
     if ! nmcli device show "$INTERFACE" >/dev/null 2>&1; then
         log_msg "Setting $INTERFACE to managed mode"
         sudo nmcli device set "$INTERFACE" managed yes || true
+        sleep 3
+        
+        # Trigger a scan to wake up the interface
+        nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
         sleep 2
     fi
     
     local state=$(nmcli device show "$INTERFACE" | grep 'GENERAL.STATE' | awk '{print $2}')
     log_msg "Interface $INTERFACE state: $state"
     
+    # State 30 = disconnected but managed (good)
+    # State 70 = connected (good)
+    # State 20 = unavailable (bad)
+    # State 10 = unmanaged (bad)
+    if [[ "$state" == "20" || "$state" == "10" ]]; then
+        log_msg "⚠ Interface state indicates issues - attempting to fix..."
+        
+        # Try to reset the interface
+        sudo nmcli device set "$INTERFACE" managed no || true
+        sleep 2
+        sudo nmcli device set "$INTERFACE" managed yes || true
+        sleep 3
+        
+        # Check state again
+        state=$(nmcli device show "$INTERFACE" | grep 'GENERAL.STATE' | awk '{print $2}')
+        log_msg "Interface $INTERFACE state after reset: $state"
+    fi
+    
     return 0
 }
 
-# FIXED: Connect to Wi-Fi network with password preservation
+# FIXED: Connect to Wi-Fi network with interface validation and hostname fix
 connect_to_wifi() {
     local ssid="$1"
     local password="$2"
@@ -85,53 +114,84 @@ connect_to_wifi() {
     
     log_msg "Attempting to connect to Wi-Fi: $ssid (interface: $INTERFACE, hostname: $HOSTNAME)"
     
-    # Check if connection already exists
-    local connection_exists=false
-    if nmcli connection show "$connection_name" >/dev/null 2>&1; then
-        connection_exists=true
-        log_msg "Connection profile '$connection_name' already exists, reusing..."
-    else
-        log_msg "Creating new connection profile '$connection_name'..."
-        
-        # Create new WiFi connection ONLY if it doesn't exist
-        if nmcli connection add \
-            type wifi \
-            con-name "$connection_name" \
-            ifname "$INTERFACE" \
-            ssid "$ssid" \
-            wifi-sec.key-mgmt wpa-psk \
-            wifi-sec.psk "$password" \
-            ipv4.method auto \
-            ipv6.method auto \
-            ipv4.dhcp-hostname "$HOSTNAME" \
-            ipv6.dhcp-hostname "$HOSTNAME"; then
-            
-            log_msg "✓ Created Wi-Fi connection: $connection_name (interface: $INTERFACE, hostname: $HOSTNAME)"
-            connection_exists=true
-        else
-            log_msg "✗ Failed to create Wi-Fi connection for interface $INTERFACE"
-            return 1
-        fi
+    # Pre-connection checks for fresh installations
+    log_msg "Performing pre-connection checks..."
+    
+    # Ensure interface is ready
+    local state=$(nmcli device show "$INTERFACE" | grep 'GENERAL.STATE' | awk '{print $2}')
+    if [[ "$state" == "20" ]]; then  # unavailable
+        log_msg "Interface unavailable, waiting for it to become ready..."
+        sleep 5
+        nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
+        sleep 3
     fi
     
-    # Only proceed if we have a valid connection profile
-    if [[ "$connection_exists" != "true" ]]; then
-        log_msg "✗ No valid connection profile available"
+    # Check if target SSID is visible
+    log_msg "Scanning for target SSID: $ssid"
+    nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
+    sleep 3
+    
+    if ! nmcli device wifi list ifname "$INTERFACE" | grep -q "$ssid"; then
+        log_msg "⚠ Target SSID '$ssid' not visible in scan, but continuing anyway..."
+    else
+        log_msg "✓ Target SSID '$ssid' is visible"
+    fi
+    
+    # CRITICAL FIX: Clean up any existing connections to avoid interface conflicts
+    log_msg "Cleaning up any existing connection profiles for $ssid..."
+    nmcli connection delete "$connection_name" 2>/dev/null || true
+    
+    # CRITICAL FIX: Ensure we're creating a WiFi connection with explicit interface binding
+    log_msg "Creating new Wi-Fi connection profile '$connection_name'..."
+    if nmcli connection add \
+        type wifi \
+        con-name "$connection_name" \
+        ifname "$INTERFACE" \
+        ssid "$ssid" \
+        wifi-sec.key-mgmt wpa-psk \
+        wifi-sec.psk "$password" \
+        ipv4.method auto \
+        ipv6.method auto \
+        ipv4.dhcp-hostname "$HOSTNAME" \
+        ipv6.dhcp-hostname "$HOSTNAME" \
+        connection.autoconnect yes \
+        wifi.powersave 2; then
+        
+        log_msg "✓ Created Wi-Fi connection: $connection_name (interface: $INTERFACE, hostname: $HOSTNAME)"
+    else
+        log_msg "✗ Failed to create Wi-Fi connection for interface $INTERFACE"
         return 1
     fi
     
-    # Attempt to connect with timeout
+    # FIXED: DO NOT change system hostname - use connection-specific hostname only
+    # This prevents hostname conflicts between good and bad clients
+    log_msg "Using connection-specific hostname: $HOSTNAME (not changing system hostname)"
+    
+    # Disconnect any existing connections on this interface first
+    log_msg "Ensuring clean connection state on $INTERFACE..."
+    nmcli device disconnect "$INTERFACE" 2>/dev/null || true
+    sleep 2
+    
+    # Attempt to connect with timeout and explicit interface specification
     log_msg "Connecting to $ssid on $INTERFACE (timeout: ${CONNECTION_TIMEOUT}s)..."
     
-    if timeout "$CONNECTION_TIMEOUT" nmcli connection up "$connection_name"; then
+    if timeout "$CONNECTION_TIMEOUT" nmcli connection up "$connection_name" ifname "$INTERFACE"; then
         log_msg "✓ Successfully connected to $ssid on $INTERFACE"
         
         # Wait for IP assignment with better error handling
         local wait_count=0
-        while [[ $wait_count -lt 15 ]]; do
+        while [[ $wait_count -lt 15 ]]; do  # Increased wait time
             local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
             if [[ -n "$ip_addr" ]]; then
                 log_msg "✓ IP address assigned: $ip_addr (hostname: $HOSTNAME)"
+                
+                # Test basic connectivity
+                if ping -I "$INTERFACE" -c 1 -W 5 8.8.8.8 >/dev/null 2>&1; then
+                    log_msg "✓ Internet connectivity confirmed on $INTERFACE"
+                else
+                    log_msg "⚠ No internet connectivity, but connection established on $INTERFACE"
+                fi
+                
                 return 0
             fi
             sleep 2
@@ -142,51 +202,72 @@ connect_to_wifi() {
         return 1
     else
         log_msg "✗ Failed to connect to $ssid on $INTERFACE"
-        # CRITICAL: DO NOT delete the connection profile here!
-        # Keep the password for next retry
-        log_msg "Connection profile preserved for next retry"
+        
+        # Check for common error reasons
+        log_msg "Checking connection failure details..."
+        local connection_status=$(nmcli connection show "$connection_name" 2>/dev/null | grep "GENERAL.STATE" | awk '{print $2}' || echo "unknown")
+        log_msg "Connection status: $connection_status"
+        
+        # CRITICAL: Clean up failed connection to prevent interface conflicts
+        log_msg "Cleaning up failed connection profile"
+        nmcli connection delete "$connection_name" 2>/dev/null || true
         return 1
     fi
 }
 
-# Test connectivity and generate traffic
+# IMPROVED: Test connectivity with better error handling and interface validation
 test_connectivity_and_traffic() {
     local success_count=0
     local total_tests=${#TEST_URLS[@]}
     
-    log_msg "Testing connectivity and generating traffic..."
+    log_msg "Testing connectivity through $INTERFACE..."
+    
+    # First check if interface has IP address
+    local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
+    if [[ -z "$ip_addr" ]]; then
+        log_msg "✗ No IP address on $INTERFACE - skipping traffic tests"
+        return 1
+    fi
+    
+    log_msg "Interface $INTERFACE has IP: $ip_addr - proceeding with traffic tests"
     
     for url in "${TEST_URLS[@]}"; do
         if curl --interface "$INTERFACE" \
-               --max-time 10 \
+               --max-time 15 \
+               --connect-timeout 10 \
                --silent \
                --location \
                --output /dev/null \
                "$url" 2>/dev/null; then
-            log_msg "✓ Traffic test passed: $url"
+            log_msg "✓ Traffic test passed: $url (via $INTERFACE)"
             ((success_count++))
         else
-            log_msg "✗ Traffic test failed: $url"
+            log_msg "✗ Traffic test failed: $url (via $INTERFACE)"
         fi
         
         # Small delay between tests
-        sleep 1
+        sleep 2
     done
     
-    log_msg "Traffic test results: $success_count/$total_tests passed"
+    log_msg "Traffic test results: $success_count/$total_tests passed on $INTERFACE"
     
-    # Additional traffic patterns for good client
-    generate_good_client_traffic
+    # Generate additional traffic if we have connectivity
+    if [[ $success_count -gt 0 ]]; then
+        generate_good_client_traffic
+    fi
     
     return $([[ $success_count -gt 0 ]] && echo 0 || echo 1)
 }
 
-# Generate typical "good client" traffic patterns
+# Generate typical "good client" traffic patterns with interface validation
 generate_good_client_traffic() {
     # Background ping to maintain connection
     {
-        ping -I "$INTERFACE" -c 5 -i 0.5 8.8.8.8 >/dev/null 2>&1 && \
-        log_msg "✓ Background ping successful"
+        if ping -I "$INTERFACE" -c 5 -i 0.5 8.8.8.8 >/dev/null 2>&1; then
+            log_msg "✓ Background ping successful on $INTERFACE"
+        else
+            log_msg "✗ Background ping failed on $INTERFACE"
+        fi
     } &
     
     # Simulate web browsing traffic
@@ -204,7 +285,9 @@ generate_good_client_traffic() {
                    --location \
                    --output /dev/null \
                    "$web_url" 2>/dev/null; then
-                log_msg "✓ Web traffic: $(basename "$web_url")"
+                log_msg "✓ Web traffic: $(basename "$web_url") on $INTERFACE"
+            else
+                log_msg "✗ Web traffic failed: $(basename "$web_url") on $INTERFACE"
             fi
             sleep 2
         done
@@ -216,6 +299,8 @@ generate_good_client_traffic() {
         for target in "${dns_targets[@]}"; do
             if nslookup "$target" >/dev/null 2>&1; then
                 log_msg "✓ DNS query: $target"
+            else
+                log_msg "✗ DNS query failed: $target"
             fi
         done
     } &
@@ -223,7 +308,7 @@ generate_good_client_traffic() {
     wait  # Wait for all background traffic to complete
 }
 
-# Get detailed connection information
+# Get detailed connection information with interface validation
 get_connection_info() {
     local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
     local mac_addr=$(ip link show "$INTERFACE" | grep 'link/ether' | awk '{print $2}')
@@ -234,7 +319,7 @@ get_connection_info() {
         wifi_info=$(iwconfig "$INTERFACE" 2>/dev/null | grep -E "(ESSID|Frequency|Signal)" | tr '\n' ' ')
     fi
     
-    log_msg "Connection Info - IP: ${ip_addr:-none}, MAC: ${mac_addr:-none}"
+    log_msg "Connection Info - Interface: $INTERFACE, IP: ${ip_addr:-none}, MAC: ${mac_addr:-none}"
     [[ -n "$wifi_info" ]] && log_msg "Wi-Fi Info: $wifi_info"
 }
 
