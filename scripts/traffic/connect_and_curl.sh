@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Wi-Fi Good Client Simulation
+# Wi-Fi Good Client Simulation - FIXED VERSION
 # Connects to Wi-Fi network successfully and generates normal traffic
 
 INTERFACE="wlan0"
@@ -67,28 +67,28 @@ check_wifi_interface() {
     # Ensure NetworkManager manages this interface
     if ! nmcli device show "$INTERFACE" >/dev/null 2>&1; then
         log_msg "Setting $INTERFACE to managed mode"
-        sudo nmcli device set "$INTERFACE" managed yes || true
+        sudo nmcli device set "$INTERFACE" managed yes 2>/dev/null || true
         sleep 2
     fi
     
-    local state=$(nmcli device show "$INTERFACE" | grep 'GENERAL.STATE' | awk '{print $2}')
+    local state=$(nmcli device show "$INTERFACE" | grep 'GENERAL.STATE' | awk '{print $2}' 2>/dev/null || echo "unknown")
     log_msg "Interface $INTERFACE state: $state"
     
     return 0
 }
 
-# Connect to Wi-Fi network
+# FIXED: Connect to Wi-Fi network with per-connection hostname
 connect_to_wifi() {
     local ssid="$1"
     local password="$2"
     local connection_name="wifi-good-$ssid"
     
-    log_msg "Attempting to connect to Wi-Fi: $ssid"
+    log_msg "Attempting to connect to Wi-Fi: $ssid (interface: $INTERFACE, hostname: $HOSTNAME)"
     
-    # Remove any existing connection with the same name
+    # Clean up any existing connections to avoid conflicts
     nmcli connection delete "$connection_name" 2>/dev/null || true
     
-    # Create new Wi-Fi connection
+    # CRITICAL FIX: Ensure we're creating a WiFi connection, not ethernet
     if nmcli connection add \
         type wifi \
         con-name "$connection_name" \
@@ -97,56 +97,64 @@ connect_to_wifi() {
         wifi-sec.key-mgmt wpa-psk \
         wifi-sec.psk "$password" \
         ipv4.method auto \
-        ipv6.method auto; then
+        ipv6.method auto \
+        ipv4.dhcp-hostname "$HOSTNAME" \
+        ipv6.dhcp-hostname "$HOSTNAME"; then
         
-        log_msg "✓ Created Wi-Fi connection: $connection_name"
+        log_msg "✓ Created Wi-Fi connection: $connection_name (interface: $INTERFACE, hostname: $HOSTNAME)"
     else
-        log_msg "✗ Failed to create Wi-Fi connection"
+        log_msg "✗ Failed to create Wi-Fi connection for interface $INTERFACE"
         return 1
     fi
     
-    # Set hostname for DHCP identification
-    if command -v hostnamectl >/dev/null 2>&1; then
-        sudo hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || true
-    fi
+    # FIXED: DO NOT change system hostname - use connection-specific hostname only
+    # This prevents hostname conflicts between good and bad clients
     
     # Attempt to connect with timeout
-    log_msg "Connecting to $ssid (timeout: ${CONNECTION_TIMEOUT}s)..."
+    log_msg "Connecting to $ssid on $INTERFACE (timeout: ${CONNECTION_TIMEOUT}s)..."
     
     if timeout "$CONNECTION_TIMEOUT" nmcli connection up "$connection_name"; then
-        log_msg "✓ Successfully connected to $ssid"
+        log_msg "✓ Successfully connected to $ssid on $INTERFACE"
         
-        # Wait for IP assignment
+        # Wait for IP assignment with better error handling
         local wait_count=0
-        while [[ $wait_count -lt 10 ]]; do
+        while [[ $wait_count -lt 15 ]]; do  # Increased wait time
             local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
             if [[ -n "$ip_addr" ]]; then
-                log_msg "✓ IP address assigned: $ip_addr"
+                log_msg "✓ IP address assigned: $ip_addr (hostname: $HOSTNAME)"
                 return 0
             fi
             sleep 2
             ((wait_count++))
         done
         
-        log_msg "⚠ Connected but no IP address assigned"
+        log_msg "⚠ Connected but no IP address assigned after 30 seconds"
         return 1
     else
-        log_msg "✗ Failed to connect to $ssid"
+        log_msg "✗ Failed to connect to $ssid on $INTERFACE"
         nmcli connection delete "$connection_name" 2>/dev/null || true
         return 1
     fi
 }
 
-# Test connectivity and generate traffic
+# IMPROVED: Test connectivity with better error handling
 test_connectivity_and_traffic() {
     local success_count=0
     local total_tests=${#TEST_URLS[@]}
     
-    log_msg "Testing connectivity and generating traffic..."
+    log_msg "Testing connectivity through $INTERFACE..."
+    
+    # First check if interface has IP
+    local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
+    if [[ -z "$ip_addr" ]]; then
+        log_msg "✗ No IP address on $INTERFACE - skipping traffic tests"
+        return 1
+    fi
     
     for url in "${TEST_URLS[@]}"; do
         if curl --interface "$INTERFACE" \
-               --max-time 10 \
+               --max-time 15 \
+               --connect-timeout 10 \
                --silent \
                --location \
                --output /dev/null \
@@ -154,17 +162,19 @@ test_connectivity_and_traffic() {
             log_msg "✓ Traffic test passed: $url"
             ((success_count++))
         else
-            log_msg "✗ Traffic test failed: $url"
+            log_msg "✗ Traffic test failed: $url (interface: $INTERFACE)"
         fi
         
         # Small delay between tests
-        sleep 1
+        sleep 2
     done
     
-    log_msg "Traffic test results: $success_count/$total_tests passed"
+    log_msg "Traffic test results: $success_count/$total_tests passed on $INTERFACE"
     
-    # Additional traffic patterns for good client
-    generate_good_client_traffic
+    # Generate additional traffic if we have connectivity
+    if [[ $success_count -gt 0 ]]; then
+        generate_good_client_traffic
+    fi
     
     return $([[ $success_count -gt 0 ]] && echo 0 || echo 1)
 }
@@ -173,8 +183,11 @@ test_connectivity_and_traffic() {
 generate_good_client_traffic() {
     # Background ping to maintain connection
     {
-        ping -I "$INTERFACE" -c 5 -i 0.5 8.8.8.8 >/dev/null 2>&1 && \
-        log_msg "✓ Background ping successful"
+        if ping -I "$INTERFACE" -c 5 -i 0.5 8.8.8.8 >/dev/null 2>&1; then
+            log_msg "✓ Background ping successful on $INTERFACE"
+        else
+            log_msg "✗ Background ping failed on $INTERFACE"
+        fi
     } &
     
     # Simulate web browsing traffic
@@ -192,7 +205,9 @@ generate_good_client_traffic() {
                    --location \
                    --output /dev/null \
                    "$web_url" 2>/dev/null; then
-                log_msg "✓ Web traffic: $(basename "$web_url")"
+                log_msg "✓ Web traffic: $(basename "$web_url") on $INTERFACE"
+            else
+                log_msg "✗ Web traffic failed: $(basename "$web_url") on $INTERFACE"
             fi
             sleep 2
         done
@@ -222,7 +237,7 @@ get_connection_info() {
         wifi_info=$(iwconfig "$INTERFACE" 2>/dev/null | grep -E "(ESSID|Frequency|Signal)" | tr '\n' ' ')
     fi
     
-    log_msg "Connection Info - IP: ${ip_addr:-none}, MAC: ${mac_addr:-none}"
+    log_msg "Connection Info - Interface: $INTERFACE, IP: ${ip_addr:-none}, MAC: ${mac_addr:-none}"
     [[ -n "$wifi_info" ]] && log_msg "Wi-Fi Info: $wifi_info"
 }
 
@@ -231,7 +246,7 @@ is_connected_to_ssid() {
     local target_ssid="$1"
     
     # Get current SSID using NetworkManager
-    local current_ssid=$(nmcli -t -f active,ssid dev wifi | grep '^yes' | cut -d':' -f2)
+    local current_ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | grep '^yes' | cut -d':' -f2 || echo "")
     
     if [[ "$current_ssid" == "$target_ssid" ]]; then
         return 0
@@ -240,12 +255,13 @@ is_connected_to_ssid() {
     fi
 }
 
-# Main monitoring and connection loop
+# IMPROVED: Main monitoring and connection loop with better error handling
 main_loop() {
     log_msg "Starting Wi-Fi good client simulation (interface: $INTERFACE, hostname: $HOSTNAME)"
     
     local retry_count=0
     local last_config_check=0
+    local consecutive_failures=0
     
     while true; do
         local current_time=$(date +%s)
@@ -261,42 +277,45 @@ main_loop() {
         fi
         
         if ! check_wifi_interface; then
-            log_msg "✗ Wi-Fi interface check failed"
+            log_msg "✗ Wi-Fi interface $INTERFACE check failed"
             sleep $REFRESH_INTERVAL
             continue
         fi
         
         # Check if we're connected to the right network
         if is_connected_to_ssid "$SSID"; then
-            log_msg "✓ Connected to target SSID: $SSID"
+            log_msg "✓ Connected to target SSID: $SSID on $INTERFACE"
             get_connection_info
             
             # Test connectivity and generate traffic
             if test_connectivity_and_traffic; then
                 retry_count=0
-                log_msg "✓ Wi-Fi good client operating normally"
+                consecutive_failures=0
+                log_msg "✓ Wi-Fi good client operating normally on $INTERFACE"
             else
-                ((retry_count++))
-                log_msg "✗ Connectivity issues detected (attempt $retry_count/$MAX_RETRIES)"
+                ((consecutive_failures++))
+                log_msg "✗ Connectivity issues detected on $INTERFACE (failures: $consecutive_failures/$MAX_RETRIES)"
                 
-                if [[ $retry_count -ge $MAX_RETRIES ]]; then
-                    log_msg "Max retries reached, forcing reconnection"
+                # Only disconnect after multiple failures to avoid unnecessary restarts
+                if [[ $consecutive_failures -ge $MAX_RETRIES ]]; then
+                    log_msg "Multiple connectivity failures, forcing reconnection on $INTERFACE"
                     # Disconnect and reconnect
                     nmcli device disconnect "$INTERFACE" 2>/dev/null || true
                     sleep 5
-                    retry_count=0
+                    consecutive_failures=0
                 fi
             fi
         else
-            log_msg "Not connected to target SSID, attempting connection..."
+            log_msg "Not connected to target SSID, attempting connection on $INTERFACE..."
             
             if connect_to_wifi "$SSID" "$PASSWORD"; then
                 retry_count=0
-                log_msg "✓ Successfully established Wi-Fi connection"
+                consecutive_failures=0
+                log_msg "✓ Successfully established Wi-Fi connection on $INTERFACE"
                 sleep 10  # Allow connection to stabilize
             else
                 ((retry_count++))
-                log_msg "✗ Wi-Fi connection failed (attempt $retry_count/$MAX_RETRIES)"
+                log_msg "✗ Wi-Fi connection failed on $INTERFACE (attempt $retry_count/$MAX_RETRIES)"
                 
                 if [[ $retry_count -ge $MAX_RETRIES ]]; then
                     log_msg "Max connection retries reached, waiting longer before retry"
@@ -324,11 +343,18 @@ cleanup_and_exit() {
 # Signal handlers
 trap cleanup_and_exit SIGTERM SIGINT EXIT
 
+# Ensure log directory exists
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+
 # Initial config read
 if ! read_wifi_config; then
     log_msg "✗ Failed to read initial configuration, exiting"
     exit 1
 fi
+
+# Validate interface assignment
+log_msg "Using interface: $INTERFACE for good client simulation"
+log_msg "Target hostname: $HOSTNAME"
 
 # Start main loop
 main_loop
