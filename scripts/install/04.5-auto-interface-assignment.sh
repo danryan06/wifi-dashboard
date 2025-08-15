@@ -1,441 +1,338 @@
-<!-- Add this as a new tab in dashboard.html -->
+#!/usr/bin/env bash
+# scripts/install/04.5-auto-interface-assignment.sh
+# Automatically detect and assign network interfaces optimally
 
-<!-- Add to the tabs section -->
-<div class="tab" data-tab="interfaces">🔌 Interfaces</div>
+set -euo pipefail
 
-<!-- Add this new tab content section -->
-<div id="interfaces" class="card hidden">
-    <h2>🔌 Interface Assignments</h2>
-    <p style="color: var(--muted); margin-bottom: 24px;">
-        Intelligent interface detection and assignment for optimal performance.
-    </p>
+log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
+log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
+log_error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; }
+
+log_info "Auto-detecting and assigning network interfaces..."
+
+# Detect interface capabilities
+detect_interface_capabilities() {
+    local iface="$1"
+    local capabilities=""
     
-    <div class="interface-assignment-grid" id="interface-assignment-grid">
-        <div style="text-align: center; padding: 40px; color: var(--muted);">
-            <span class="spinner"></span> Loading interface assignments...
-        </div>
-    </div>
+    # Check if interface exists
+    if ! ip link show "$iface" >/dev/null 2>&1; then
+        echo "not_found"
+        return
+    fi
     
-    <div class="optimization-info" id="optimization-info" style="margin-top: 24px;">
-        <!-- Optimization recommendations will be loaded here -->
-    </div>
-</div>
-
-<style>
-.interface-assignment-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-    gap: 20px;
-    margin-bottom: 24px;
-}
-
-.interface-assignment-card {
-    background: rgba(255,255,255,0.05);
-    border-radius: 12px;
-    padding: 20px;
-    border: 1px solid var(--border);
-    transition: all 0.2s ease;
-    position: relative;
-}
-
-.interface-assignment-card:hover {
-    background: rgba(255,255,255,0.08);
-    transform: translateY(-2px);
-}
-
-.interface-assignment-card.good-client {
-    border-left: 4px solid var(--success);
-}
-
-.interface-assignment-card.bad-client {
-    border-left: 4px solid var(--warning);
-}
-
-.interface-assignment-card.wired-client {
-    border-left: 4px solid var(--info);
-}
-
-.interface-assignment-card.unassigned {
-    border-left: 4px solid var(--muted);
-    opacity: 0.7;
-}
-
-.interface-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-}
-
-.interface-name {
-    font-size: 1.3em;
-    font-weight: 600;
-    color: var(--fg);
-}
-
-.interface-assignment-badge {
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: 0.75em;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.assignment-good {
-    background: var(--success);
-    color: white;
-}
-
-.assignment-bad {
-    background: var(--warning);
-    color: black;
-}
-
-.assignment-wired {
-    background: var(--info);
-    color: white;
-}
-
-.assignment-unassigned {
-    background: var(--muted);
-    color: white;
-}
-
-.interface-details {
-    margin-bottom: 16px;
-}
-
-.detail-row {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 8px;
-    font-size: 0.9em;
-}
-
-.detail-label {
-    color: var(--muted);
-    font-weight: 500;
-}
-
-.detail-value {
-    color: var(--fg);
-    font-family: monospace;
-}
-
-.capability-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 12px;
-}
-
-.capability-tag {
-    padding: 3px 8px;
-    border-radius: 12px;
-    font-size: 0.7em;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-}
-
-.tag-builtin {
-    background: rgba(76, 175, 80, 0.2);
-    color: var(--success);
-}
-
-.tag-dual-band {
-    background: rgba(33, 150, 243, 0.2);
-    color: var(--info);
-}
-
-.tag-usb {
-    background: rgba(255, 152, 0, 0.2);
-    color: var(--warning);
-}
-
-.tag-2ghz {
-    background: rgba(158, 158, 158, 0.2);
-    color: var(--muted);
-}
-
-.tag-ethernet {
-    background: rgba(76, 175, 80, 0.2);
-    color: var(--success);
-}
-
-.wireless-connection-info {
-    background: rgba(255,255,255,0.03);
-    padding: 12px;
-    border-radius: 8px;
-    margin-top: 12px;
-    border: 1px dashed var(--border);
-}
-
-.connection-info-title {
-    font-size: 0.8em;
-    color: var(--muted);
-    margin-bottom: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.optimization-recommendations {
-    background: rgba(76, 175, 80, 0.1);
-    border-left: 4px solid var(--success);
-    padding: 16px;
-    border-radius: 8px;
-    margin-top: 16px;
-}
-
-.optimization-title {
-    font-size: 1.1em;
-    font-weight: 600;
-    color: var(--success);
-    margin-bottom: 12px;
-}
-
-.recommendation-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-}
-
-.recommendation-list li {
-    padding: 4px 0;
-    color: var(--fg);
-}
-
-.recommendation-list li:before {
-    content: "✓ ";
-    color: var(--success);
-    font-weight: bold;
-}
-
-.auto-detection-info {
-    background: rgba(33, 150, 243, 0.1);
-    border-left: 4px solid var(--info);
-    padding: 16px;
-    border-radius: 8px;
-    margin-bottom: 16px;
-}
-</style>
-
-<script>
-// JavaScript functions for interface display
-
-async function updateInterfaceAssignments() {
-    try {
-        const response = await fetch('/api/interfaces');
-        if (response.ok) {
-            const data = await response.json();
-            if (data.success) {
-                displayInterfaceAssignments(data);
-            } else {
-                showInterfaceError('Failed to load interface data');
-            }
-        } else {
-            showInterfaceError('Interface API not available');
-        }
-    } catch (error) {
-        console.error('Error loading interface assignments:', error);
-        showInterfaceError('Error loading interface assignments');
-    }
-}
-
-function displayInterfaceAssignments(data) {
-    const container = document.getElementById('interface-assignment-grid');
-    const optimizationContainer = document.getElementById('optimization-info');
-    
-    if (!data.interfaces || Object.keys(data.interfaces).length === 0) {
-        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--muted);">No network interfaces detected</div>';
-        return;
-    }
-    
-    // Show auto-detection info
-    if (data.auto_detected) {
-        optimizationContainer.innerHTML = `
-            <div class="auto-detection-info">
-                <div style="font-weight: 600; margin-bottom: 8px;">🤖 Automatic Interface Detection</div>
-                <div>Interfaces were automatically detected and optimally assigned based on capabilities and hardware type.</div>
-            </div>
-        `;
-    }
-    
-    // Sort interfaces by assignment priority
-    const sortedInterfaces = Object.entries(data.interfaces).sort(([,a], [,b]) => {
-        const priority = { 'good_client': 3, 'bad_client': 2, 'wired_client': 1, 'unassigned': 0 };
-        return (priority[b.assignment] || 0) - (priority[a.assignment] || 0);
-    });
-    
-    container.innerHTML = sortedInterfaces.map(([iface, info]) => {
-        const assignmentClass = info.assignment.replace('_', '-');
-        const assignmentName = info.assignment.replace('_', ' ').toUpperCase();
+    # Determine interface type and capabilities
+    if [[ -d "/sys/class/net/$iface/device" ]]; then
+        local device_path=$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null || echo "")
         
-        // Generate capability tags
-        const capabilityTags = (info.capabilities || []).map(cap => {
-            const tagClass = cap.replace('_', '-');
-            const tagText = cap.replace('_', ' ').toUpperCase();
-            return `<span class="capability-tag tag-${tagClass}">${tagText}</span>`;
-        }).join('');
-        
-        // Wireless connection info
-        let connectionInfo = '';
-        if (info.wireless_info && Object.keys(info.wireless_info).length > 0) {
-            const { ssid, signal, frequency } = info.wireless_info;
-            if (ssid) {
-                connectionInfo = `
-                    <div class="wireless-connection-info">
-                        <div class="connection-info-title">Current Connection</div>
-                        <div class="detail-row">
-                            <span class="detail-label">SSID:</span>
-                            <span class="detail-value">${ssid}</span>
-                        </div>
-                        ${signal ? `
-                        <div class="detail-row">
-                            <span class="detail-label">Signal:</span>
-                            <span class="detail-value">${signal}%</span>
-                        </div>` : ''}
-                        ${frequency ? `
-                        <div class="detail-row">
-                            <span class="detail-label">Frequency:</span>
-                            <span class="detail-value">${frequency}</span>
-                        </div>` : ''}
-                    </div>
-                `;
-            }
-        }
-        
-        return `
-            <div class="interface-assignment-card ${assignmentClass}">
-                <div class="interface-header">
-                    <div class="interface-name">${iface.toUpperCase()}</div>
-                    <div class="interface-assignment-badge assignment-${assignmentClass.replace('-client', '')}">${assignmentName}</div>
-                </div>
+        # Check if it's built-in or USB
+        if [[ "$device_path" == *"mmc"* ]] || [[ "$device_path" == *"sdio"* ]]; then
+            capabilities="builtin"
+            
+            # Check for dual-band capability (Raspberry Pi 3B+, 4, Zero 2 W have dual-band)
+            if grep -q "Raspberry Pi 4\|Raspberry Pi 3 Model B Plus\|Raspberry Pi Zero 2" /proc/cpuinfo 2>/dev/null; then
+                capabilities="builtin_dualband"
+            fi
+            
+        elif [[ "$device_path" == *"usb"* ]]; then
+            capabilities="usb"
+            
+            # Try to detect if USB adapter supports 5GHz
+            if command -v iwlist >/dev/null 2>&1; then
+                # Bring interface up temporarily to scan capabilities
+                ip link set "$iface" up 2>/dev/null || true
+                sleep 2
                 
-                <div class="interface-details">
-                    <div class="detail-row">
-                        <span class="detail-label">Type:</span>
-                        <span class="detail-value">${info.type}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">State:</span>
-                        <span class="detail-value">${info.state}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">IP Address:</span>
-                        <span class="detail-value">${info.ip_address || 'Not assigned'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Assignment:</span>
-                        <span class="detail-value">${info.description}</span>
-                    </div>
-                </div>
+                if iwlist "$iface" frequency 2>/dev/null | grep -q "5\."; then
+                    capabilities="usb_dualband"
+                else
+                    capabilities="usb_2ghz"
+                fi
                 
-                ${capabilityTags ? `
-                <div class="capability-tags">
-                    ${capabilityTags}
-                </div>` : ''}
-                
-                ${connectionInfo}
-            </div>
-        `;
-    }).join('');
+                ip link set "$iface" down 2>/dev/null || true
+            else
+                capabilities="usb_unknown"
+            fi
+        else
+            capabilities="unknown"
+        fi
+    else
+        capabilities="virtual"
+    fi
     
-    // Add optimization recommendations
-    generateOptimizationRecommendations(data, optimizationContainer);
+    echo "$capabilities"
 }
 
-function generateOptimizationRecommendations(data, container) {
-    const interfaces = data.interfaces;
-    const recommendations = [];
-    
-    // Find good client interface
-    const goodClient = Object.entries(interfaces).find(([,info]) => info.assignment === 'good_client');
-    if (goodClient) {
-        const [iface, info] = goodClient;
-        
-        if (info.capabilities && info.capabilities.includes('dual_band')) {
-            recommendations.push('Built-in dual-band adapter assigned to good client for optimal 5GHz performance');
-        }
-        
-        if (info.capabilities && info.capabilities.includes('builtin')) {
-            recommendations.push('Built-in adapter provides better antenna positioning and reliability');
-        }
-        
-        if (info.state === 'UP' && info.ip_address) {
-            recommendations.push(`Good client (${iface}) is connected and ready for traffic generation`);
-        }
-    }
-    
-    // Check bad client
-    const badClient = Object.entries(interfaces).find(([,info]) => info.assignment === 'bad_client');
-    if (badClient) {
-        const [iface, info] = badClient;
-        recommendations.push(`Bad client (${iface}) will generate authentication failures for security testing`);
-        
-        if (info.capabilities && info.capabilities.includes('usb')) {
-            recommendations.push('USB adapter used for bad client to isolate authentication failures');
-        }
-    } else {
-        recommendations.push('Consider adding a USB Wi-Fi adapter for bad client simulation');
-    }
-    
-    // Check for dual-band capability
-    const dualBandInterfaces = Object.entries(interfaces).filter(([,info]) => 
-        info.capabilities && info.capabilities.includes('dual_band')
-    );
-    
-    if (dualBandInterfaces.length > 0) {
-        recommendations.push('5GHz bands available for reduced interference and better performance');
-    }
-    
-    if (recommendations.length > 0) {
-        const optimizationHtml = `
-            <div class="optimization-recommendations">
-                <div class="optimization-title">🚀 Optimization Benefits</div>
-                <ul class="recommendation-list">
-                    ${recommendations.map(rec => `<li>${rec}</li>`).join('')}
-                </ul>
-            </div>
-        `;
-        
-        container.innerHTML += optimizationHtml;
-    }
-}
+# Get list of all Wi-Fi interfaces
+wifi_interfaces=($(ip link show | grep -E "wlan[0-9]" | cut -d: -f2 | tr -d ' ' || true))
 
-function showInterfaceError(message) {
-    const container = document.getElementById('interface-assignment-grid');
-    container.innerHTML = `
-        <div style="text-align: center; padding: 40px; color: var(--error);">
-            ⚠️ ${message}
-        </div>
-    `;
-}
+log_info "Detected Wi-Fi interfaces: ${wifi_interfaces[*]:-none}"
 
-// Add interface tab to the main update function
-function updateUI(data) {
-    // ... existing updateUI code ...
-    
-    // Update interface assignments if on interfaces tab
-    const interfacesTab = document.getElementById('interfaces');
-    if (interfacesTab && !interfacesTab.classList.contains('hidden')) {
-        updateInterfaceAssignments();
-    }
-}
+# Analyze each interface
+declare -A interface_caps
+declare -A interface_priority
 
-// Update tab switching to load interface data when tab is opened
-function switchTab(tabName) {
-    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-    document.querySelector(`[data-tab="${tabName}"]`).classList.add("active");
-    const sections = ["status", "wifi", "netem", "services", "logs", "controls", "interfaces"];
-    sections.forEach(section => {
-        document.getElementById(section).classList.toggle("hidden", section !== tabName);
-    });
+for iface in "${wifi_interfaces[@]}"; do
+    caps=$(detect_interface_capabilities "$iface")
+    interface_caps["$iface"]="$caps"
     
-    // Load interface data when interfaces tab is opened
-    if (tabName === 'interfaces') {
-        updateInterfaceAssignments();
-    }
-}
-</script>
+    log_info "  $iface: $caps"
+    
+    # Assign priority for good client assignment
+    case "$caps" in
+        "builtin_dualband")
+            interface_priority["$iface"]=100  # Highest priority
+            ;;
+        "builtin")
+            interface_priority["$iface"]=90
+            ;;
+        "usb_dualband")
+            interface_priority["$iface"]=80
+            ;;
+        "usb_2ghz"|"usb_unknown")
+            interface_priority["$iface"]=70
+            ;;
+        *)
+            interface_priority["$iface"]=50
+            ;;
+    esac
+done
+
+# Sort interfaces by priority for assignment
+good_client_iface=""
+bad_client_iface=""
+
+# Find best interface for good client (highest priority)
+max_priority=0
+for iface in "${wifi_interfaces[@]}"; do
+    priority=${interface_priority["$iface"]}
+    if [[ $priority -gt $max_priority ]]; then
+        max_priority=$priority
+        good_client_iface="$iface"
+    fi
+done
+
+# Find interface for bad client (different from good client, prefer USB)
+for iface in "${wifi_interfaces[@]}"; do
+    if [[ "$iface" != "$good_client_iface" ]]; then
+        caps=${interface_caps["$iface"]}
+        if [[ "$caps" == usb* ]]; then
+            bad_client_iface="$iface"
+            break
+        fi
+    fi
+done
+
+# If no USB available for bad client, use any other interface
+if [[ -z "$bad_client_iface" ]]; then
+    for iface in "${wifi_interfaces[@]}"; do
+        if [[ "$iface" != "$good_client_iface" ]]; then
+            bad_client_iface="$iface"
+            break
+        fi
+    done
+fi
+
+# Validate we have at least one interface
+if [[ -z "$good_client_iface" ]]; then
+    if [[ ${#wifi_interfaces[@]} -gt 0 ]]; then
+        good_client_iface="${wifi_interfaces[0]}"
+        log_warn "No optimal interface found, using first available: $good_client_iface"
+    else
+        log_error "No Wi-Fi interfaces detected!"
+        exit 1
+    fi
+fi
+
+# Create interface assignment configuration
+log_info "Interface assignments:"
+log_info "  Good Wi-Fi client: $good_client_iface (${interface_caps[$good_client_iface]})"
+if [[ -n "$bad_client_iface" ]]; then
+    log_info "  Bad Wi-Fi client:  $bad_client_iface (${interface_caps[$bad_client_iface]})"
+else
+    log_warn "  Bad Wi-Fi client:  Not available (only one Wi-Fi interface)"
+fi
+log_info "  Wired client:      eth0"
+
+# Generate optimized settings.conf
+log_info "Generating optimized configuration..."
+
+# Determine traffic intensities based on capabilities
+good_traffic_intensity="medium"
+bad_traffic_intensity="light"
+
+case "${interface_caps[$good_client_iface]}" in
+    "builtin_dualband")
+        good_traffic_intensity="heavy"  # Built-in dual-band can handle heavy traffic
+        ;;
+    "usb_dualband")
+        good_traffic_intensity="medium"  # USB dual-band gets medium
+        ;;
+    *)
+        good_traffic_intensity="light"   # 2.4GHz only gets light traffic
+        ;;
+esac
+
+# Create interface assignment file
+cat > "$PI_HOME/wifi_test_dashboard/configs/interface-assignments.conf" << EOF
+# Auto-generated interface assignments
+# Generated: $(date)
+
+# Good Wi-Fi client assignment
+WIFI_GOOD_INTERFACE=$good_client_iface
+WIFI_GOOD_INTERFACE_TYPE=${interface_caps[$good_client_iface]}
+WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood
+WIFI_GOOD_TRAFFIC_INTENSITY=$good_traffic_intensity
+
+# Bad Wi-Fi client assignment
+WIFI_BAD_INTERFACE=${bad_client_iface:-none}
+WIFI_BAD_INTERFACE_TYPE=${interface_caps[$bad_client_iface]:-none}
+WIFI_BAD_HOSTNAME=CNXNMist-WiFiBad
+WIFI_BAD_TRAFFIC_INTENSITY=$bad_traffic_intensity
+
+# Wired client assignment
+WIRED_INTERFACE=eth0
+WIRED_HOSTNAME=CNXNMist-Wired
+WIRED_TRAFFIC_INTENSITY=heavy
+
+# Interface capabilities detected
+$(for iface in "${wifi_interfaces[@]}"; do
+    echo "# $iface: ${interface_caps[$iface]}"
+done)
+EOF
+
+# Update main settings.conf with discovered interfaces
+if [[ -f "$PI_HOME/wifi_test_dashboard/configs/settings.conf" ]]; then
+    # Update interface assignments in settings.conf
+    sed -i "s/WIFI_GOOD_INTERFACE=.*/WIFI_GOOD_INTERFACE=$good_client_iface/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
+    sed -i "s/WIFI_BAD_INTERFACE=.*/WIFI_BAD_INTERFACE=${bad_client_iface:-wlan1}/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
+    
+    # Update hostnames based on capabilities
+    if [[ "${interface_caps[$good_client_iface]}" == *"dualband"* ]]; then
+        sed -i "s/WIFI_GOOD_HOSTNAME=.*/WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood-5G/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
+    else
+        sed -i "s/WIFI_GOOD_HOSTNAME=.*/WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood-2G/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
+    fi
+    
+    if [[ -n "$bad_client_iface" ]]; then
+        sed -i "s/WIFI_BAD_HOSTNAME=.*/WIFI_BAD_HOSTNAME=CNXNMist-WiFiBad-2G/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
+    fi
+    
+    # Update traffic intensities
+    sed -i "s/WLAN0_TRAFFIC_INTENSITY=.*/WLAN0_TRAFFIC_INTENSITY=$good_traffic_intensity/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
+    if [[ -n "$bad_client_iface" ]]; then
+        sed -i "s/WLAN1_TRAFFIC_INTENSITY=.*/WLAN1_TRAFFIC_INTENSITY=$bad_traffic_intensity/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
+    fi
+fi
+
+# Update scripts with correct interface assignments
+log_info "Updating scripts with interface assignments..."
+
+# Update good Wi-Fi client script
+if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh" ]]; then
+    sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$good_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
+    
+    if [[ "${interface_caps[$good_client_iface]}" == *"dualband"* ]]; then
+        sed -i "s/HOSTNAME=\".*\"/HOSTNAME=\"CNXNMist-WiFiGood-5G\"/" "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
+    else
+        sed -i "s/HOSTNAME=\".*\"/HOSTNAME=\"CNXNMist-WiFiGood-2G\"/" "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
+    fi
+fi
+
+# Update bad Wi-Fi client script
+if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh" && -n "$bad_client_iface" ]]; then
+    sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$bad_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh"
+    sed -i "s/HOSTNAME=\".*\"/HOSTNAME=\"CNXNMist-WiFiBad-2G\"/" "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh"
+fi
+
+# Create installation summary
+cat > "$PI_HOME/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md" << EOF
+# 📡 Wi-Fi Test Dashboard - Interface Assignment
+
+**Auto-detected on:** $(date)  
+**Raspberry Pi Model:** $(cat /proc/cpuinfo | grep "Model" | cut -d: -f2 | xargs || echo "Unknown")
+
+## 🎯 Optimal Configuration Applied
+
+### Good Wi-Fi Client
+- **Interface:** \`$good_client_iface\`
+- **Type:** ${interface_caps[$good_client_iface]}
+- **Hostname:** CNXNMist-WiFiGood$([ "${interface_caps[$good_client_iface]}" == *"dualband"* ] && echo "-5G" || echo "-2G")
+- **Traffic Intensity:** $good_traffic_intensity
+- **Capabilities:** $([ "${interface_caps[$good_client_iface]}" == *"dualband"* ] && echo "Dual-band (2.4GHz + 5GHz)" || echo "2.4GHz only")
+
+### Bad Wi-Fi Client
+$(if [[ -n "$bad_client_iface" ]]; then
+cat << BADCLIENT
+- **Interface:** \`$bad_client_iface\`
+- **Type:** ${interface_caps[$bad_client_iface]}
+- **Hostname:** CNXNMist-WiFiBad-2G
+- **Traffic Intensity:** $bad_traffic_intensity
+- **Purpose:** Authentication failure simulation
+BADCLIENT
+else
+echo "- **Status:** Not available (only one Wi-Fi interface detected)"
+fi)
+
+### Wired Client
+- **Interface:** \`eth0\`
+- **Hostname:** CNXNMist-Wired
+- **Traffic Intensity:** heavy
+
+## 🚀 Performance Expectations
+
+$(case "${interface_caps[$good_client_iface]}" in
+    "builtin_dualband")
+        echo "**Excellent Performance Expected**"
+        echo "- Built-in dual-band adapter with 5GHz support"
+        echo "- High throughput capability"
+        echo "- Better range and reliability"
+        ;;
+    "builtin")
+        echo "**Good Performance Expected**"
+        echo "- Built-in adapter with reliable connectivity"
+        echo "- 2.4GHz operation"
+        ;;
+    "usb_dualband")
+        echo "**Good Performance Expected**"
+        echo "- USB dual-band adapter with 5GHz support"
+        echo "- May be limited by USB bandwidth"
+        ;;
+    *)
+        echo "**Basic Performance Expected**"
+        echo "- 2.4GHz operation only"
+        echo "- Suitable for testing but limited throughput"
+        ;;
+esac)
+
+## 🔍 Interface Details
+
+$(for iface in "${wifi_interfaces[@]}"; do
+    echo "### $iface"
+    echo "- **Type:** ${interface_caps[$iface]}"
+    echo "- **Assignment:** $([ "$iface" == "$good_client_iface" ] && echo "Good client" || ([ "$iface" == "$bad_client_iface" ] && echo "Bad client" || echo "Unused"))"
+    echo
+done)
+
+## 💡 Optimization Notes
+
+- The system automatically selected the best available interface for the good client
+- $([ "${interface_caps[$good_client_iface]}" == *"dualband"* ] && echo "5GHz will be used when available for better performance" || echo "Consider adding a dual-band USB adapter for better performance")
+- Traffic intensities are set based on interface capabilities
+- Bad client uses separate interface to avoid interference
+
+## 🔧 Manual Override
+
+If you need to change interface assignments, edit:
+- \`configs/settings.conf\` - Main configuration
+- \`configs/interface-assignments.conf\` - Interface assignments
+- Then restart services: \`sudo systemctl restart wifi-good wifi-bad\`
+EOF
+
+# Set ownership
+chown -R "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/configs/"
+chown "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md"
+
+log_info "✓ Auto-interface assignment completed"
+log_info "✓ Configuration saved to interface-assignments.conf"
+log_info "✓ Installation summary: INTERFACE_ASSIGNMENT.md"

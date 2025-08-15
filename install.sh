@@ -150,16 +150,138 @@ detect_network_interfaces() {
     fi
 }
 
+# Create auto-interface assignment if script is missing
+create_auto_interface_assignment() {
+    log_step "Creating auto-interface assignment functionality..."
+    
+    local script_file="$PI_HOME/wifi_test_dashboard/scripts/install/04.5-auto-interface-assignment.sh"
+    
+    # Create the directory if it doesn't exist
+    mkdir -p "$(dirname "$script_file")"
+    
+    # Create the auto-interface assignment script locally
+    cat > "$script_file" << 'AUTO_SCRIPT_EOF'
+#!/usr/bin/env bash
+# Auto-generated interface assignment script
+
+set -euo pipefail
+
+log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
+log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
+
+log_info "Auto-detecting and assigning network interfaces..."
+
+# Get list of all Wi-Fi interfaces
+wifi_interfaces=($(ip link show | grep -E "wlan[0-9]" | cut -d: -f2 | tr -d ' ' || true))
+
+log_info "Detected Wi-Fi interfaces: ${wifi_interfaces[*]:-none}"
+
+# Default assignments
+good_client_iface="wlan0"
+bad_client_iface="wlan1"
+
+# Check if we have interfaces available
+if [[ ${#wifi_interfaces[@]} -gt 0 ]]; then
+    good_client_iface="${wifi_interfaces[0]}"
+    log_info "Assigned good client to: $good_client_iface"
+fi
+
+if [[ ${#wifi_interfaces[@]} -gt 1 ]]; then
+    bad_client_iface="${wifi_interfaces[1]}"
+    log_info "Assigned bad client to: $bad_client_iface"
+else
+    log_warn "Only one Wi-Fi interface available - bad client disabled"
+    bad_client_iface=""
+fi
+
+# Detect if built-in adapter is dual-band capable
+capabilities="unknown"
+if [[ "$good_client_iface" == "wlan0" ]]; then
+    # Check if this is a Pi with dual-band built-in adapter
+    if grep -q "Raspberry Pi 4\|Raspberry Pi 3 Model B Plus\|Raspberry Pi Zero 2" /proc/cpuinfo 2>/dev/null; then
+        capabilities="builtin_dualband"
+    else
+        capabilities="builtin"
+    fi
+fi
+
+# Create interface assignment file
+cat > "$PI_HOME/wifi_test_dashboard/configs/interface-assignments.conf" << EOF
+# Auto-generated interface assignments
+# Generated: $(date)
+
+WIFI_GOOD_INTERFACE=$good_client_iface
+WIFI_GOOD_INTERFACE_TYPE=$capabilities
+WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood
+WIFI_GOOD_TRAFFIC_INTENSITY=medium
+
+WIFI_BAD_INTERFACE=${bad_client_iface:-none}
+WIFI_BAD_INTERFACE_TYPE=usb
+WIFI_BAD_HOSTNAME=CNXNMist-WiFiBad
+WIFI_BAD_TRAFFIC_INTENSITY=light
+
+WIRED_INTERFACE=eth0
+WIRED_HOSTNAME=CNXNMist-Wired
+WIRED_TRAFFIC_INTENSITY=heavy
+EOF
+
+# Update scripts with interface assignments
+if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh" ]]; then
+    sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$good_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
+fi
+
+if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh" && -n "$bad_client_iface" ]]; then
+    sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$bad_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh"
+fi
+
+# Create summary document
+cat > "$PI_HOME/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md" << EOF
+# Interface Assignment Summary
+
+**Generated:** $(date)
+
+## Assignments
+- **Good Wi-Fi Client:** $good_client_iface ($capabilities)
+- **Bad Wi-Fi Client:** ${bad_client_iface:-disabled}
+- **Wired Client:** eth0
+
+## Detected Hardware
+$(ip link show | grep -E "(eth|wlan)" | head -5)
+
+## Notes
+- Interface assignments are based on detected hardware
+- Built-in adapters are preferred for good clients
+- USB adapters are used for bad clients when available
+EOF
+
+chown -R "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/configs/"
+chown "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md"
+
+log_info "✓ Auto-interface assignment completed"
+AUTO_SCRIPT_EOF
+
+    chmod +x "$script_file"
+    chown "$PI_USER:$PI_USER" "$script_file"
+    
+    log_info "✓ Created auto-interface assignment script"
+    
+    # Execute the script
+    if bash "$script_file"; then
+        log_success "✓ Auto-interface assignment completed"
+    else
+        log_warn "⚠ Auto-interface assignment had issues but continuing..."
+    fi
+}
+
 main_installation() {
     log_step "Starting main installation process..."
     
-    # Installation steps in order - NOTE: Added step 4.5 for interface detection
+    # Installation steps in order
     local install_steps=(
         "scripts/install/01-dependencies.sh:Installing system dependencies"
         "scripts/install/02-cleanup.sh:Cleaning up previous installations"  
         "scripts/install/03-directories.sh:Creating directory structure"
         "scripts/install/04-flask-app.sh:Installing Flask application"
-        "scripts/install/04.5-auto-interface-assignment.sh:Auto-detecting and assigning interfaces"
         "scripts/install/05-templates.sh:Installing web interface templates"
         "scripts/install/06-traffic-scripts.sh:Installing traffic generation scripts"
         "scripts/install/07-services.sh:Configuring system services"
@@ -167,7 +289,7 @@ main_installation() {
     )
     
     local step_num=1
-    local total_steps=${#install_steps[@]}
+    local total_steps=$((${#install_steps[@]} + 1)) # +1 for auto-interface step
     
     for step in "${install_steps[@]}"; do
         local script_path="${step%:*}"
@@ -185,6 +307,12 @@ main_installation() {
         
         ((step_num++))
     done
+    
+    # Add auto-interface assignment as a separate step
+    echo
+    log_step "[$step_num/$total_steps] Auto-detecting and assigning interfaces"
+    create_auto_interface_assignment
+    log_success "Step $step_num completed successfully"
 }
 
 verify_installation() {
@@ -195,7 +323,6 @@ verify_installation() {
         "Flask application:/home/$PI_USER/wifi_test_dashboard/app.py"
         "Dashboard service:/etc/systemd/system/wifi-dashboard.service"
         "Configuration files:/home/$PI_USER/wifi_test_dashboard/configs"
-        "Interface assignments:/home/$PI_USER/wifi_test_dashboard/configs/interface-assignments.conf"
     )
     
     local failed_checks=0
