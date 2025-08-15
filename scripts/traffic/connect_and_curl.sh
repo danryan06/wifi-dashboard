@@ -1,3 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wi-Fi Good Client Simulation
+# Connects to Wi-Fi network successfully and generates normal traffic
+
+INTERFACE="wlan0"
+HOSTNAME="CNXNMist-WiFiGood"
+LOG_FILE="/home/pi/wifi_test_dashboard/logs/wifi-good.log"
+CONFIG_FILE="/home/pi/wifi_test_dashboard/configs/ssid.conf"
+SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
+
+# Source settings if available
+[[ -f "$SETTINGS" ]] && source "$SETTINGS" || true
+
+# Override with environment variables if set
+INTERFACE="${WIFI_GOOD_INTERFACE:-$INTERFACE}"
+HOSTNAME="${WIFI_GOOD_HOSTNAME:-$HOSTNAME}"
+REFRESH_INTERVAL="${WIFI_GOOD_REFRESH_INTERVAL:-60}"
+CONNECTION_TIMEOUT="${WIFI_CONNECTION_TIMEOUT:-30}"
+MAX_RETRIES="${WIFI_MAX_RETRY_ATTEMPTS:-3}"
+
+# Test URLs for connectivity testing
+TEST_URLS=(
+    "https://www.google.com"
+    "https://www.cloudflare.com"
+    "https://httpbin.org/ip"
+    "https://www.github.com"
+)
+
+log_msg() {
+    echo "[$(date '+%F %T')] WIFI-GOOD: $1" | tee -a "$LOG_FILE"
+}
+
+# Read Wi-Fi credentials from config file
+read_wifi_config() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        log_msg "✗ Config file not found: $CONFIG_FILE"
+        return 1
+    fi
+    
+    local lines=($(cat "$CONFIG_FILE"))
+    if [[ ${#lines[@]} -lt 2 ]]; then
+        log_msg "✗ Config file incomplete (need SSID and password)"
+        return 1
+    fi
+    
+    SSID="${lines[0]}"
+    PASSWORD="${lines[1]}"
+    
+    if [[ -z "$SSID" || -z "$PASSWORD" ]]; then
+        log_msg "✗ SSID or password is empty"
+        return 1
+    fi
+    
+    log_msg "✓ Wi-Fi config loaded (SSID: $SSID)"
+    return 0
+}
+
+# Check if Wi-Fi interface exists and is managed
+check_wifi_interface() {
+    if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+        log_msg "✗ Wi-Fi interface $INTERFACE not found"
+        return 1
+    fi
+    
+    # Ensure NetworkManager manages this interface
+    if ! nmcli device show "$INTERFACE" >/dev/null 2>&1; then
+        log_msg "Setting $INTERFACE to managed mode"
+        sudo nmcli device set "$INTERFACE" managed yes || true
+        sleep 2
+    fi
+    
+    local state=$(nmcli device show "$INTERFACE" | grep 'GENERAL.STATE' | awk '{print $2}')
+    log_msg "Interface $INTERFACE state: $state"
+    
+    return 0
+}
+
 # FIXED: Connect to Wi-Fi network with password preservation
 connect_to_wifi() {
     local ssid="$1"
@@ -70,6 +149,109 @@ connect_to_wifi() {
     fi
 }
 
+# Test connectivity and generate traffic
+test_connectivity_and_traffic() {
+    local success_count=0
+    local total_tests=${#TEST_URLS[@]}
+    
+    log_msg "Testing connectivity and generating traffic..."
+    
+    for url in "${TEST_URLS[@]}"; do
+        if curl --interface "$INTERFACE" \
+               --max-time 10 \
+               --silent \
+               --location \
+               --output /dev/null \
+               "$url" 2>/dev/null; then
+            log_msg "✓ Traffic test passed: $url"
+            ((success_count++))
+        else
+            log_msg "✗ Traffic test failed: $url"
+        fi
+        
+        # Small delay between tests
+        sleep 1
+    done
+    
+    log_msg "Traffic test results: $success_count/$total_tests passed"
+    
+    # Additional traffic patterns for good client
+    generate_good_client_traffic
+    
+    return $([[ $success_count -gt 0 ]] && echo 0 || echo 1)
+}
+
+# Generate typical "good client" traffic patterns
+generate_good_client_traffic() {
+    # Background ping to maintain connection
+    {
+        ping -I "$INTERFACE" -c 5 -i 0.5 8.8.8.8 >/dev/null 2>&1 && \
+        log_msg "✓ Background ping successful"
+    } &
+    
+    # Simulate web browsing traffic
+    {
+        local web_urls=(
+            "https://httpbin.org/bytes/1024"
+            "https://httpbin.org/json" 
+            "https://httpbin.org/headers"
+        )
+        
+        for web_url in "${web_urls[@]}"; do
+            if curl --interface "$INTERFACE" \
+                   --max-time 15 \
+                   --silent \
+                   --location \
+                   --output /dev/null \
+                   "$web_url" 2>/dev/null; then
+                log_msg "✓ Web traffic: $(basename "$web_url")"
+            fi
+            sleep 2
+        done
+    } &
+    
+    # DNS queries
+    {
+        local dns_targets=("google.com" "cloudflare.com" "github.com")
+        for target in "${dns_targets[@]}"; do
+            if nslookup "$target" >/dev/null 2>&1; then
+                log_msg "✓ DNS query: $target"
+            fi
+        done
+    } &
+    
+    wait  # Wait for all background traffic to complete
+}
+
+# Get detailed connection information
+get_connection_info() {
+    local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
+    local mac_addr=$(ip link show "$INTERFACE" | grep 'link/ether' | awk '{print $2}')
+    
+    # Get Wi-Fi specific info
+    local wifi_info=""
+    if command -v iwconfig >/dev/null 2>&1; then
+        wifi_info=$(iwconfig "$INTERFACE" 2>/dev/null | grep -E "(ESSID|Frequency|Signal)" | tr '\n' ' ')
+    fi
+    
+    log_msg "Connection Info - IP: ${ip_addr:-none}, MAC: ${mac_addr:-none}"
+    [[ -n "$wifi_info" ]] && log_msg "Wi-Fi Info: $wifi_info"
+}
+
+# Check if currently connected to the target SSID
+is_connected_to_ssid() {
+    local target_ssid="$1"
+    
+    # Get current SSID using NetworkManager
+    local current_ssid=$(nmcli -t -f active,ssid dev wifi | grep '^yes' | cut -d':' -f2)
+    
+    if [[ "$current_ssid" == "$target_ssid" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # UPDATED: Main loop with better connection profile management
 main_loop() {
     log_msg "Starting Wi-Fi good client simulation (interface: $INTERFACE, hostname: $HOSTNAME)"
@@ -77,7 +259,6 @@ main_loop() {
     local retry_count=0
     local last_config_check=0
     local consecutive_failures=0
-    local last_password=""
     
     while true; do
         local current_time=$(date +%s)
