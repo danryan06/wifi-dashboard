@@ -38,7 +38,7 @@ log_msg() {
     echo "[$(date '+%F %T')] WIFI-BAD: $1" | tee -a "$LOG_FILE"
 }
 
-# Read Wi-Fi SSID from config file (but use wrong password)
+# Read Wi-Fi SSID from config file (but NEVER use the real password)
 read_wifi_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
         log_msg "✗ Config file not found: $CONFIG_FILE"
@@ -58,8 +58,38 @@ read_wifi_config() {
         return 1
     fi
     
-    log_msg "✓ Target SSID loaded: $SSID (will use wrong passwords)"
+    log_msg "✓ Target SSID loaded: $SSID (will ONLY use wrong passwords)"
+    log_msg "ℹ️ Real password from config will be ignored for security testing"
+    
+    # Clear any existing NetworkManager connections to this SSID to prevent password reuse
+    clear_cached_credentials "$SSID"
+    
     return 0
+}
+
+# Clear any cached credentials for the target SSID
+clear_cached_credentials() {
+    local ssid="$1"
+    log_msg "🧹 Clearing cached credentials for SSID: $ssid"
+    
+    # Find and delete any existing connections to this SSID
+    local existing_connections=$(nmcli -t -f NAME,TYPE connection show 2>/dev/null | grep ":wifi$" | cut -d: -f1)
+    
+    while IFS= read -r conn_name; do
+        if [[ -n "$conn_name" ]]; then
+            # Check if this connection is for our target SSID
+            local conn_ssid=$(nmcli -t -f 802-11-wireless.ssid connection show "$conn_name" 2>/dev/null | cut -d: -f2)
+            if [[ "$conn_ssid" == "$ssid" ]]; then
+                log_msg "🧹 Removing cached connection: $conn_name"
+                nmcli connection delete "$conn_name" 2>/dev/null || true
+            fi
+        fi
+    done <<< "$existing_connections"
+    
+    # Also ensure we're disconnected from this SSID
+    force_disconnect
+    
+    log_msg "✓ Credential cache cleared for $ssid"
 }
 
 # Check if Wi-Fi interface exists and is managed
@@ -138,8 +168,9 @@ attempt_bad_connection() {
     
     log_msg "Attempting connection with wrong password: ***${wrong_password: -3}"
     
-    # Ensure we start disconnected
+    # Ensure we start disconnected and clear any cached credentials
     force_disconnect
+    clear_cached_credentials "$ssid"
     
     # Create temporary connection with wrong password
     if nmcli connection add \
@@ -175,6 +206,7 @@ attempt_bad_connection() {
         log_msg "🚨 SSID '$ssid' accepted password: ***${wrong_password: -3}"
         log_msg "🚨 This indicates a serious security vulnerability!"
         log_msg "🚨 Network may have no password or weak security"
+        log_msg "🚨 OR: Cached credentials were reused (check NetworkManager)"
         
         # Log connection details for security analysis
         local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1 2>/dev/null || echo "unknown")
@@ -183,6 +215,10 @@ attempt_bad_connection() {
         # Check what security we actually connected with
         local security_info=$(nmcli -t -f SECURITY dev wifi | head -n1 2>/dev/null || echo "unknown")
         log_msg "🚨 Network security detected as: $security_info"
+        
+        # Check if NetworkManager has any stored credentials
+        local stored_connections=$(nmcli -t -f NAME connection show 2>/dev/null | grep -v "$connection_name")
+        log_msg "🚨 Other stored connections: $stored_connections"
         
         # IMMEDIATE FORCED DISCONNECT - we should not remain connected
         log_msg "🚨 Forcing immediate disconnect due to security concern"
@@ -204,7 +240,7 @@ attempt_bad_connection() {
         connection_result=1  # Expected failure
     fi
     
-    # Clean up the connection profile
+    # Clean up the connection profile immediately
     nmcli connection delete "$connection_name" 2>/dev/null || true
     
     # Ensure we're disconnected after attempt
