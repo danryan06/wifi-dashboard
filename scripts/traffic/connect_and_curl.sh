@@ -165,3 +165,22 @@ cleanup_and_exit() {
     log_msg "Wi-Fi good client simulation stopped"
     exit 0
 }
+
+# Signal handlers - safer approach
+trap cleanup_and_exit SIGTERM SIGINT
+
+# Ensure log directory exists
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+
+# Initial config read
+if ! read_wifi_config; then
+    log_msg "✗ Failed to read initial configuration, exiting"
+    exit 1
+fi
+
+# Validate interface assignment
+log_msg "Using interface: $INTERFACE for good client simulation"
+log_msg "Target hostname: $HOSTNAME"
+
+# Start main loop
+main_loop
