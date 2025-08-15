@@ -13,6 +13,9 @@ SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
 # Source settings if available
 [[ -f "$SETTINGS" ]] && source "$SETTINGS" || true
 
+# Make sure tools installed in user space are on PATH when run via systemd
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
 # Override with environment variables if set
 INTERFACE="${WIFI_GOOD_INTERFACE:-$INTERFACE}"
 HOSTNAME="${WIFI_GOOD_HOSTNAME:-$HOSTNAME}"
@@ -56,6 +59,54 @@ read_wifi_config() {
     log_msg "✓ Wi-Fi config loaded (SSID: $SSID)"
     return 0
 }
+
+# Decide if it's time to run a YouTube-like pull
+_should_run_youtube_now() {
+  # falls back to 600s if not set
+  local interval="${YOUTUBE_TRAFFIC_INTERVAL:-600}"
+  # disabled if flag isn't true
+  [[ "${ENABLE_YOUTUBE_TRAFFIC:-false}" == "true" ]] || return 1
+
+  local stamp="/tmp/.wifi_good_youtube_last"
+  local now ts
+  now="$(date +%s)"
+  if [[ ! -f "$stamp" ]]; then
+    echo "$now" > "$stamp"
+    return 0
+  fi
+  ts="$(cat "$stamp" 2>/dev/null || echo 0)"
+  if (( now - ts >= interval )); then
+    echo "$now" > "$stamp"
+    return 0
+  fi
+  return 1
+}
+
+# One-shot stream-like traffic: resolve a direct media URL, then pull bytes via curl
+run_youtube_probe_once() {
+  local iface="${1:-wlan0}"
+  local max_secs="${YOUTUBE_MAX_DURATION:-300}"
+
+  # preflight
+  [[ "${ENABLE_YOUTUBE_TRAFFIC:-false}" == "true" ]] || return 0
+  command -v yt-dlp >/dev/null 2>&1 || { log_msg "YouTube: yt-dlp not found; skipping"; return 0; }
+  [[ -n "${YOUTUBE_PLAYLIST_URL:-}" ]] || { log_msg "YouTube: playlist URL empty; skipping"; return 0; }
+
+  # get a direct media URL (best quality)
+  local media_url
+  if ! media_url="$(yt-dlp -f best -g "$YOUTUBE_PLAYLIST_URL" 2>/dev/null | head -n1)"; then
+    log_msg "YouTube: failed to resolve media URL"
+    return 0
+  fi
+  [[ -n "$media_url" ]] || { log_msg "YouTube: empty media URL"; return 0; }
+
+  log_msg "Starting YouTube-like pull on $iface for ~${max_secs}s"
+  timeout "$max_secs" curl -L --interface "$iface" --max-time "$max_secs" \
+    --silent --output /dev/null "$media_url" \
+    && log_msg "YouTube-like pull completed" \
+    || log_msg "YouTube-like pull ended (timeout/err)"
+}
+
 
 # Check if Wi-Fi interface exists and is managed
 check_wifi_interface() {
@@ -376,6 +427,18 @@ main_loop() {
             log_msg "✓ Connected to target SSID: $SSID on $INTERFACE"
             get_connection_info
             
+            # Kick off a periodic YouTube-like transfer if due (optionally tie to intensity)
+            if [[ "${WLAN0_TRAFFIC_INTENSITY:-medium}" =~ ^(heavy|max)$ \
+            || "${WLAN0_TRAFFIC_TYPE:-all}" =~ (^|,)youtube(,|$) \
+            || "${WLAN0_TRAFFIC_TYPE:-all}" =~ (^|,)all(,|$) ]]; then
+            if _should_run_youtube_now; then
+                log_msg "YouTube-like pull: starting scheduled run on $INTERFACE"
+                run_youtube_probe_once "$INTERFACE"
+            fi
+            fi
+
+
+
             # Test connectivity and generate traffic
             if test_connectivity_and_traffic; then
                 retry_count=0
