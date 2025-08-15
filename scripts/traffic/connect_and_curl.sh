@@ -82,31 +82,92 @@ _should_run_youtube_now() {
   return 1
 }
 
-# One-shot stream-like traffic: resolve a direct media URL, then pull bytes via curl
 run_youtube_probe_once() {
-  local iface="${1:-wlan0}"
-  local max_secs="${YOUTUBE_MAX_DURATION:-300}"
+  local iface="${1:-$INTERFACE}"
+  local yt="${YT_DLP_BIN:-yt-dlp}"
+  local log_tmp="/tmp/youtube_probe.$$"
+  : >"$log_tmp"
 
-  # preflight
-  [[ "${ENABLE_YOUTUBE_TRAFFIC:-false}" == "true" ]] || return 0
-  command -v yt-dlp >/dev/null 2>&1 || { log_msg "YouTube: yt-dlp not found; skipping"; return 0; }
-  [[ -n "${YOUTUBE_PLAYLIST_URL:-}" ]] || { log_msg "YouTube: playlist URL empty; skipping"; return 0; }
+  # Choose a source: explicit list (comma-sep) or the playlist
+  local video_url=""
+  if [[ -n "${YOUTUBE_VIDEO_LIST:-}" ]]; then
+    # If you ever set YOUTUBE_VIDEO_LIST="id1,id2,..." in settings.conf
+    local pick
+    IFS=',' read -r -a _vlist <<< "$YOUTUBE_VIDEO_LIST"
+    pick="${_vlist[$((RANDOM % ${#_vlist[@]}))]}"
+    video_url="https://www.youtube.com/watch?v=${pick}"
+  else
+    # Fast: fetch one ID from the playlist (random pick if you like)
+    # first get count
+    local count
+    count="$($yt -4 --flat-playlist --quiet --dump-single-json \
+              "$YOUTUBE_PLAYLIST_URL" 2>>"$log_tmp" \
+              | python3 - <<'PY' 2>>"$log_tmp"
+import sys, json
+d=json.load(sys.stdin)
+print(len(d.get("entries",[])))
+PY
+           )" || count=""
+    if [[ -n "$count" && "$count" =~ ^[0-9]+$ && "$count" -gt 0 ]]; then
+      local idx=$(( (RANDOM % count) + 1 ))
+      local vid
+      vid="$($yt -4 --flat-playlist --quiet -I "$idx:$idx" --get-id \
+               "$YOUTUBE_PLAYLIST_URL" 2>>"$log_tmp" | head -n1)" || vid=""
+      if [[ -n "$vid" ]]; then
+        video_url="https://www.youtube.com/watch?v=${vid}"
+      fi
+    fi
+  fi
 
-  # get a direct media URL (best quality)
-  local media_url
-  if ! media_url="$(yt-dlp -f best -g "$YOUTUBE_PLAYLIST_URL" 2>/dev/null | head -n1)"; then
-    log_msg "YouTube: failed to resolve media URL"
+  if [[ -z "$video_url" ]]; then
+    log_msg "YouTube: could not pick a video from playlist; using CDN fallback"
+    curl --interface "$iface" --max-time 120 \
+      --range 0-104857600 --silent --location --output /dev/null \
+      https://ash-speed.hetzner.com/100MB.bin || true
     return 0
   fi
-  [[ -n "$media_url" ]] || { log_msg "YouTube: empty media URL"; return 0; }
 
-  log_msg "Starting YouTube-like pull on $iface for ~${max_secs}s"
-  timeout "$max_secs" curl -L --interface "$iface" --max-time "$max_secs" \
-    --silent --output /dev/null "$media_url" \
-    && log_msg "YouTube-like pull completed" \
-    || log_msg "YouTube-like pull ended (timeout/err)"
+  log_msg "YouTube-like pull: starting scheduled run on $iface"
+  local media_url=""
+
+  # Try normal extractor first
+  media_url="$($yt -4 --no-playlist \
+      -f 'bv*[height<=360]+ba/b[height<=360]' \
+      -g "$video_url" 2>>"$log_tmp" | head -n1 || true)"
+
+  # If empty, try self-update then retry
+  if [[ -z "$media_url" ]]; then
+    $yt -U >/dev/null 2>&1 || true
+    media_url="$($yt -4 --no-playlist \
+        -f 'bv*[height<=360]+ba/b[height<=360]' \
+        -g "$video_url" 2>>"$log_tmp" | head -n1 || true)"
+  fi
+
+  # If still empty, try android player client
+  if [[ -z "$media_url" ]]; then
+    media_url="$($yt -4 --extractor-args youtube:player_client=android \
+        --no-playlist -f 'bv*+ba/b' \
+        -g "$video_url" 2>>"$log_tmp" | head -n1 || true)"
+  fi
+
+  if [[ -n "$media_url" ]]; then
+    log_msg "YouTube: resolved media URL; pulling data over $iface"
+    curl --interface "$iface" --max-time 120 \
+      --range 0-104857600 --silent --location --output /dev/null \
+      "$media_url" || true
+  else
+    log_msg "YouTube: failed to resolve media URL"
+    # Drop a hint into the service log for debugging:
+    while IFS= read -r L; do log_msg "YouTube debug: $L"; done <"$log_tmp"
+    # Still generate load so the dashboard shows activity:
+    curl --interface "$iface" --max-time 120 \
+      --range 0-104857600 --silent --location --output /dev/null \
+      https://ash-speed.hetzner.com/100MB.bin || true
+  fi
+
+  rm -f "$log_tmp" || true
+  return 0
 }
-
 
 # Check if Wi-Fi interface exists and is managed
 check_wifi_interface() {
