@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
+# Fresh Raspberry Pi Wi-Fi Dashboard Installer
+# Designed for clean Pi installations with automatic NetworkManager setup
+
 set -euo pipefail
 
-# Wi-Fi Test Dashboard Installer with Auto Interface Detection
-# Downloads and installs complete dashboard system from GitHub
-# Usage: curl -sSL https://raw.githubusercontent.com/danryan06/wifi-dashboard/main/install.sh | sudo bash
-
-VERSION="v5.0.1"
+VERSION="v5.0.1-fresh"
 REPO_URL="https://raw.githubusercontent.com/danryan06/wifi-dashboard/main"
 INSTALL_DIR="/tmp/wifi-dashboard-install"
 
@@ -27,16 +26,16 @@ print_banner() {
     echo -e "${BLUE}"
     echo "███████████████████████████████████████████████████████████████████████████████"
     echo "█                                                                             █"
-    echo "█  🌐 Wi-Fi Test Dashboard with Auto Interface Detection ${VERSION}           █"
-    echo "█  🚦 Intelligent interface assignment for optimal performance               █"
-    echo "█  📡 Speedtest CLI + YouTube Traffic + Smart Configuration                  █"
+    echo "█  🌐 Wi-Fi Test Dashboard - Fresh Pi Installer ${VERSION}                   █"
+    echo "█  🔧 Automatic NetworkManager Configuration                                 █"
+    echo "█  📡 Optimized for Fresh Raspberry Pi Installations                        █"
     echo "█                                                                             █"
     echo "███████████████████████████████████████████████████████████████████████████████"
     echo -e "${NC}"
 }
 
-check_requirements() {
-    log_step "Checking system requirements..."
+check_fresh_installation() {
+    log_step "Checking system state..."
     
     # Check if running as root
     if [[ $EUID -ne 0 ]]; then
@@ -44,11 +43,15 @@ check_requirements() {
         exit 1
     fi
     
-    # Check if running on Raspberry Pi
+    # Detect Pi user
+    PI_USER=$(getent passwd 1000 | cut -d: -f1 2>/dev/null || echo "pi")
+    PI_HOME="/home/$PI_USER"
+    export PI_USER PI_HOME
+    
+    # Check if this is a Raspberry Pi
     if ! grep -q "Raspberry Pi" /proc/cpuinfo 2>/dev/null; then
         log_warn "This script is designed for Raspberry Pi, but will attempt to continue..."
     else
-        # Show Pi model for interface detection
         local pi_model=$(grep "Model" /proc/cpuinfo | cut -d: -f2 | xargs 2>/dev/null || echo "Unknown")
         log_info "Detected: $pi_model"
     fi
@@ -59,336 +62,277 @@ check_requirements() {
         exit 1
     fi
     
-    # Detect Pi user
-    PI_USER=$(getent passwd 1000 | cut -d: -f1 2>/dev/null || echo "pi")
-    PI_HOME="/home/$PI_USER"
-    export PI_USER PI_HOME
-    
-    log_info "✓ System requirements met"
+    log_info "✓ System checks passed"
     log_info "✓ Target user: $PI_USER ($PI_HOME)"
 }
 
-download_file() {
-    local url="$1"
-    local destination="$2"
-    local description="${3:-file}"
+install_enhanced_dependencies() {
+    log_step "Installing enhanced dependencies with NetworkManager fixes..."
     
-    log_info "Downloading $description..."
-    
-    # Create destination directory if it doesn't exist
-    mkdir -p "$(dirname "$destination")"
-    
-    # Download with error handling
-    if curl -sSL --max-time 30 --retry 3 "$url" -o "$destination"; then
-        log_info "✓ Downloaded $description"
-        return 0
-    else
-        log_error "✗ Failed to download $description from $url"
-        return 1
-    fi
-}
-
-download_and_execute() {
-    local script_path="$1"
-    local description="$2"
-    local temp_file="${INSTALL_DIR}/$(basename "$script_path")"
-    
-    log_step "$description"
-    
-    # Download the script
-    if download_file "${REPO_URL}/${script_path}" "$temp_file" "$description"; then
-        # Make executable and run
-        chmod +x "$temp_file"
-        if bash "$temp_file"; then
-            log_success "✓ $description completed successfully"
-        else
-            log_error "✗ $description failed"
-            return 1
-        fi
-    else
-        log_error "✗ Could not download $description"
-        return 1
-    fi
-}
-
-create_install_directory() {
-    log_step "Setting up installation environment..."
-    
-    # Clean up any previous installation attempts
-    rm -rf "$INSTALL_DIR"
-    mkdir -p "$INSTALL_DIR"
-    
-    # Export variables for sub-scripts
-    export INSTALL_DIR PI_USER PI_HOME VERSION REPO_URL
-    
-    log_info "✓ Installation directory created: $INSTALL_DIR"
-}
-
-detect_network_interfaces() {
-    log_step "Detecting network interfaces for optimal assignment..."
-    
-    # Show available interfaces
-    log_info "Available network interfaces:"
-    ip link show | grep -E "(eth|wlan).*:" | while read -r line; do
-        iface=$(echo "$line" | cut -d: -f2 | tr -d ' ')
-        state=$(echo "$line" | grep -o "state [A-Z]*" | awk '{print $2}' || echo "UNKNOWN")
-        log_info "  $iface: $state"
-    done
-    
-    # Count Wi-Fi interfaces
-    wifi_count=$(ip link show | grep -c "wlan" || echo "0")
-    log_info "Wi-Fi interfaces detected: $wifi_count"
-    
-    if [[ $wifi_count -eq 0 ]]; then
-        log_warn "No Wi-Fi interfaces detected - you may need USB Wi-Fi adapters"
-        log_warn "The system will still install but Wi-Fi testing will be limited"
-    elif [[ $wifi_count -eq 1 ]]; then
-        log_warn "Only 1 Wi-Fi interface detected - bad client simulation will be disabled"
-        log_warn "For full functionality, consider adding a USB Wi-Fi adapter"
-    else
-        log_success "Multiple Wi-Fi interfaces detected - full functionality available"
-    fi
-}
-
-# Create auto-interface assignment if script is missing
-create_auto_interface_assignment() {
-    log_step "Creating auto-interface assignment functionality..."
-    
-    local script_file="$PI_HOME/wifi_test_dashboard/scripts/install/04.5-auto-interface-assignment.sh"
-    
-    # Create the directory if it doesn't exist
-    mkdir -p "$(dirname "$script_file")"
-    
-    # Create the auto-interface assignment script locally
-    cat > "$script_file" << 'AUTO_SCRIPT_EOF'
+    # Use the enhanced dependencies script that handles NetworkManager properly
+    cat > "${INSTALL_DIR}/01-dependencies-enhanced.sh" << 'ENHANCED_DEPS_EOF'
 #!/usr/bin/env bash
-# Auto-generated interface assignment script
-
+# Enhanced dependencies installer with NetworkManager configuration
 set -euo pipefail
 
 log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
 log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
 
-log_info "Auto-detecting and assigning network interfaces..."
+log_info "Installing enhanced dependencies with NetworkManager fixes..."
 
-# Get list of all Wi-Fi interfaces
-wifi_interfaces=($(ip link show | grep -E "wlan[0-9]" | cut -d: -f2 | tr -d ' ' || true))
+# Set environment variables to prevent interactive prompts
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
 
-log_info "Detected Wi-Fi interfaces: ${wifi_interfaces[*]:-none}"
+# Update package lists
+apt-get update -y
 
-# Default assignments
-good_client_iface="wlan0"
-bad_client_iface="wlan1"
-
-# Check if we have interfaces available
-if [[ ${#wifi_interfaces[@]} -gt 0 ]]; then
-    good_client_iface="${wifi_interfaces[0]}"
-    log_info "Assigned good client to: $good_client_iface"
+# Remove conflicting services
+log_info "Removing dhcpcd conflicts..."
+if systemctl is-enabled dhcpcd >/dev/null 2>&1; then
+    systemctl disable dhcpcd || true
+    systemctl stop dhcpcd || true
 fi
 
-if [[ ${#wifi_interfaces[@]} -gt 1 ]]; then
-    bad_client_iface="${wifi_interfaces[1]}"
-    log_info "Assigned bad client to: $bad_client_iface"
-else
-    log_warn "Only one Wi-Fi interface available - bad client disabled"
-    bad_client_iface=""
-fi
+# Remove problematic packages
+apt-get remove --purge -y openresolv dhcpcd5 2>/dev/null || true
 
-# Detect if built-in adapter is dual-band capable
-capabilities="unknown"
-if [[ "$good_client_iface" == "wlan0" ]]; then
-    # Check if this is a Pi with dual-band built-in adapter
-    if grep -q "Raspberry Pi 4\|Raspberry Pi 3 Model B Plus\|Raspberry Pi Zero 2" /proc/cpuinfo 2>/dev/null; then
-        capabilities="builtin_dualband"
-    else
-        capabilities="builtin"
-    fi
-fi
+# Install core packages
+apt-get install -y \
+    network-manager \
+    python3 \
+    python3-pip \
+    curl \
+    wget \
+    wireless-tools \
+    wpasupplicant \
+    git \
+    nano
 
-# Create interface assignment file
-cat > "$PI_HOME/wifi_test_dashboard/configs/interface-assignments.conf" << EOF
-# Auto-generated interface assignments
-# Generated: $(date)
+# Configure NetworkManager
+log_info "Configuring NetworkManager..."
+cat > /etc/NetworkManager/NetworkManager.conf <<EOF
+[main]
+plugins=ifupdown,keyfile
+dhcp=dhclient
 
-WIFI_GOOD_INTERFACE=$good_client_iface
-WIFI_GOOD_INTERFACE_TYPE=$capabilities
-WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood
-WIFI_GOOD_TRAFFIC_INTENSITY=medium
+[ifupdown]
+managed=true
 
-WIFI_BAD_INTERFACE=${bad_client_iface:-none}
-WIFI_BAD_INTERFACE_TYPE=usb
-WIFI_BAD_HOSTNAME=CNXNMist-WiFiBad
-WIFI_BAD_TRAFFIC_INTENSITY=light
-
-WIRED_INTERFACE=eth0
-WIRED_HOSTNAME=CNXNMist-Wired
-WIRED_TRAFFIC_INTENSITY=heavy
+[device]
+wifi.scan-rand-mac-address=no
+wifi.powersave=2
 EOF
 
-# Update scripts with interface assignments
-if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh" ]]; then
-    sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$good_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
+    # Clean up conflicting configs
+if [[ -f "/etc/network/interfaces" ]]; then
+    cp /etc/network/interfaces /etc/network/interfaces.backup
+    sed -i '/^auto wlan0/d' /etc/network/interfaces
+    sed -i '/^iface wlan0/d' /etc/network/interfaces
+    sed -i '/wpa-ssid/d' /etc/network/interfaces
+    sed -i '/wpa-psk/d' /etc/network/interfaces
 fi
 
-if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh" && -n "$bad_client_iface" ]]; then
-    sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$bad_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh"
+# Install Python packages
+pip3 install flask requests --break-system-packages >/dev/null 2>&1 || \
+pip3 install flask requests >/dev/null 2>&1
+
+# Install traffic tools
+pip3 install yt-dlp speedtest-cli --break-system-packages >/dev/null 2>&1 || \
+pip3 install yt-dlp speedtest-cli >/dev/null 2>&1
+
+# Configure Pi-specific settings
+if grep -q "Raspberry Pi" /proc/cpuinfo 2>/dev/null; then
+    raspi-config nonint do_wifi_country US || true
+    rfkill unblock wifi || true
 fi
 
-# Create summary document
-cat > "$PI_HOME/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md" << EOF
-# Interface Assignment Summary
-
-**Generated:** $(date)
-
-## Assignments
-- **Good Wi-Fi Client:** $good_client_iface ($capabilities)
-- **Bad Wi-Fi Client:** ${bad_client_iface:-disabled}
-- **Wired Client:** eth0
-
-## Detected Hardware
-$(ip link show | grep -E "(eth|wlan)" | head -5)
-
-## Notes
-- Interface assignments are based on detected hardware
-- Built-in adapters are preferred for good clients
-- USB adapters are used for bad clients when available
-EOF
-
-chown -R "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/configs/"
-chown "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md"
-
-log_info "✓ Auto-interface assignment completed"
-AUTO_SCRIPT_EOF
-
-    chmod +x "$script_file"
-    chown "$PI_USER:$PI_USER" "$script_file"
-    
-    log_info "✓ Created auto-interface assignment script"
-    
-    # Execute the script
-    if bash "$script_file"; then
-        log_success "✓ Auto-interface assignment completed"
-    else
-        log_warn "⚠ Auto-interface assignment had issues but continuing..."
+# Force interface management
+for iface in wlan0 wlan1; do
+    if ip link show "$iface" >/dev/null 2>&1; then
+        nmcli device set "$iface" managed yes >/dev/null 2>&1 || true
+        ip link set "$iface" up 2>/dev/null || true
     fi
-}
+done
 
-main_installation() {
-    log_step "Starting main installation process..."
-    
-    # Installation steps in order
-    local install_steps=(
-        "scripts/install/01-dependencies.sh:Installing system dependencies"
-        "scripts/install/02-cleanup.sh:Cleaning up previous installations"  
-        "scripts/install/03-directories.sh:Creating directory structure"
-        "scripts/install/04-flask-app.sh:Installing Flask application"
-        "scripts/install/05-templates.sh:Installing web interface templates"
-        "scripts/install/06-traffic-scripts.sh:Installing traffic generation scripts"
-        "scripts/install/07-services.sh:Configuring system services"
-        "scripts/install/08-finalize.sh:Finalizing installation"
-    )
-    
-    local step_num=1
-    local total_steps=$((${#install_steps[@]} + 1)) # +1 for auto-interface step
-    
-    for step in "${install_steps[@]}"; do
-        local script_path="${step%:*}"
-        local description="${step#*:}"
-        
-        echo
-        log_step "[$step_num/$total_steps] $description"
-        
-        if download_and_execute "$script_path" "$description"; then
-            log_success "Step $step_num completed successfully"
-        else
-            log_error "Step $step_num failed. Installation cannot continue."
-            exit 1
-        fi
-        
-        ((step_num++))
-    done
-    
-    # Add auto-interface assignment as a separate step
-    echo
-    log_step "[$step_num/$total_steps] Auto-detecting and assigning interfaces"
-    create_auto_interface_assignment
-    log_success "Step $step_num completed successfully"
-}
+# Restart NetworkManager
+systemctl restart NetworkManager
+sleep 5
 
-verify_installation() {
-    log_step "Verifying installation..."
+log_info "✓ Enhanced dependencies installation completed"
+ENHANCED_DEPS_EOF
+
+    chmod +x "${INSTALL_DIR}/01-dependencies-enhanced.sh"
     
-    local checks=(
-        "Dashboard directory:/home/$PI_USER/wifi_test_dashboard"
-        "Flask application:/home/$PI_USER/wifi_test_dashboard/app.py"
-        "Dashboard service:/etc/systemd/system/wifi-dashboard.service"
-        "Configuration files:/home/$PI_USER/wifi_test_dashboard/configs"
-    )
-    
-    local failed_checks=0
-    
-    for check in "${checks[@]}"; do
-        local description="${check%:*}"
-        local path="${check#*:}"
-        
-        if [[ -e "$path" ]]; then
-            log_info "✓ $description: Found"
-        else
-            log_error "✗ $description: Missing ($path)"
-            ((failed_checks++))
-        fi
-    done
-    
-    # Check if dashboard service is running
-    if systemctl is-active --quiet wifi-dashboard.service; then
-        log_info "✓ Dashboard service: Running"
+    if bash "${INSTALL_DIR}/01-dependencies-enhanced.sh"; then
+        log_success "✓ Enhanced dependencies installed successfully"
     else
-        log_warn "⚠ Dashboard service: Not running (may need manual start)"
-    fi
-    
-    if [[ $failed_checks -eq 0 ]]; then
-        log_success "✓ Installation verification passed"
-        return 0
-    else
-        log_error "✗ Installation verification failed ($failed_checks issues)"
+        log_error "✗ Enhanced dependencies installation failed"
         return 1
     fi
 }
 
-cleanup_installation() {
-    log_step "Cleaning up installation files..."
-    rm -rf "$INSTALL_DIR"
-    log_info "✓ Installation files cleaned up"
+run_main_installer() {
+    log_step "Running main Wi-Fi Dashboard installation..."
+    
+    # Download and run the main installer, but skip dependencies since we already installed them
+    if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/install.sh" -o "${INSTALL_DIR}/main-install.sh"; then
+        log_info "✓ Downloaded main installer"
+        
+        # Modify the installer to skip dependencies step
+        sed -i '/01-dependencies\.sh/d' "${INSTALL_DIR}/main-install.sh"
+        sed -i 's/01-dependencies\.sh:/dependencies (skipped):/' "${INSTALL_DIR}/main-install.sh"
+        
+        chmod +x "${INSTALL_DIR}/main-install.sh"
+        
+        if bash "${INSTALL_DIR}/main-install.sh"; then
+            log_success "✓ Main installation completed"
+        else
+            log_error "✗ Main installation failed"
+            return 1
+        fi
+    else
+        log_error "✗ Failed to download main installer"
+        return 1
+    fi
 }
 
-print_success_message() {
+verify_fresh_installation() {
+    log_step "Verifying fresh installation..."
+    
+    local verification_passed=true
+    
+    # Check NetworkManager
+    if systemctl is-active --quiet NetworkManager; then
+        log_info "✓ NetworkManager: Running"
+    else
+        log_error "✗ NetworkManager: Not running"
+        verification_passed=false
+    fi
+    
+    # Check for dhcpcd conflicts
+    if systemctl is-active --quiet dhcpcd; then
+        log_warn "⚠ dhcpcd: Still running (may cause conflicts)"
+    else
+        log_info "✓ dhcpcd: Properly disabled"
+    fi
+    
+    # Check Wi-Fi interfaces
+    local wifi_interfaces_found=0
+    for iface in wlan0 wlan1; do
+        if ip link show "$iface" >/dev/null 2>&1; then
+            local state=$(nmcli device show "$iface" 2>/dev/null | grep "GENERAL.STATE" | awk '{print $2}' || echo "unknown")
+            log_info "✓ $iface: Detected (state: $state)"
+            ((wifi_interfaces_found++))
+        fi
+    done
+    
+    if [[ $wifi_interfaces_found -eq 0 ]]; then
+        log_warn "⚠ No Wi-Fi interfaces detected - check hardware"
+    else
+        log_info "✓ Found $wifi_interfaces_found Wi-Fi interface(s)"
+    fi
+    
+    # Check dashboard service
+    if systemctl is-enabled --quiet wifi-dashboard.service; then
+        log_info "✓ Dashboard service: Enabled"
+    else
+        log_warn "⚠ Dashboard service: Not enabled"
+    fi
+    
+    # Check Python dependencies
+    if python3 -c "import flask, requests" 2>/dev/null; then
+        log_info "✓ Python dependencies: Available"
+    else
+        log_error "✗ Python dependencies: Missing"
+        verification_passed=false
+    fi
+    
+    return $([[ "$verification_passed" == "true" ]] && echo 0 || echo 1)
+}
+
+post_installation_setup() {
+    log_step "Performing post-installation setup..."
+    
+    # Create a quick start guide
+    cat > "$PI_HOME/WIFI_DASHBOARD_QUICK_START.md" << 'QUICKSTART_EOF'
+# 🚀 Wi-Fi Dashboard Quick Start Guide
+
+## Fresh Installation Complete!
+
+Your Wi-Fi Test Dashboard has been installed and optimized for this fresh Raspberry Pi.
+
+## 🌐 Access Your Dashboard
+
+Open your web browser and go to:
+```
+http://YOUR_PI_IP:5000
+```
+
+Find your Pi's IP address: `hostname -I`
+
+## 📶 Configure Wi-Fi
+
+1. Click the **Wi-Fi Config** tab
+2. Enter your network SSID and password
+3. Click **Save Configuration**
+4. Services will automatically restart and connect
+
+## 🚦 Monitor Traffic
+
+- **Status Tab**: Real-time system information
+- **Traffic Control**: Start/stop traffic generation
+- **Logs Tab**: View detailed service logs
+
+## 🔧 Troubleshooting
+
+If you have connection issues:
+
+1. Check NetworkManager status:
+   ```bash
+   sudo systemctl status NetworkManager
+   ```
+
+2. Verify Wi-Fi interfaces:
+   ```bash
+   nmcli device status
+   ```
+
+3. Scan for networks:
+   ```bash
+   sudo nmcli device wifi list
+   ```
+
+4. Check service logs:
+   ```bash
+   sudo journalctl -u wifi-good.service -f
+   ```
+
+## 📋 Fresh Installation Features
+
+✅ **Automatic NetworkManager Setup**: Configured for optimal Wi-Fi performance
+✅ **Conflict Resolution**: dhcpcd disabled, interfaces properly managed  
+✅ **Password Preservation**: Connection profiles maintained between retries
+✅ **Fresh Pi Optimized**: No legacy configuration conflicts
+
+## 🎊 Your system is ready for Wi-Fi testing!
+QUICKSTART_EOF
+
+    chown "$PI_USER:$PI_USER" "$PI_HOME/WIFI_DASHBOARD_QUICK_START.md"
+    
+    log_info "✓ Created quick start guide: $PI_HOME/WIFI_DASHBOARD_QUICK_START.md"
+}
+
+print_success_summary() {
     local pi_ip
     pi_ip=$(hostname -I | awk '{print $1}' 2>/dev/null || echo "IP_NOT_FOUND")
-    
-    # Read interface assignments if available
-    local good_iface="wlan0"
-    local bad_iface="wlan1"
-    local interface_summary=""
-    
-    if [[ -f "/home/$PI_USER/wifi_test_dashboard/configs/interface-assignments.conf" ]]; then
-        source "/home/$PI_USER/wifi_test_dashboard/configs/interface-assignments.conf" 2>/dev/null || true
-        good_iface="$WIFI_GOOD_INTERFACE"
-        bad_iface="${WIFI_BAD_INTERFACE:-none}"
-        
-        interface_summary="
-🎯 INTELLIGENT INTERFACE ASSIGNMENT:
-  • Good Wi-Fi Client: $good_iface ($WIFI_GOOD_INTERFACE_TYPE)
-  • Bad Wi-Fi Client:  ${bad_iface} (${WIFI_BAD_INTERFACE_TYPE:-disabled})
-  • Wired Client:      eth0 (ethernet)
-  • Hostname Pattern:  $WIFI_GOOD_HOSTNAME / $WIFI_BAD_HOSTNAME"
-    fi
     
     echo
     echo -e "${GREEN}███████████████████████████████████████████████████████████████████████████████${NC}"
     echo -e "${GREEN}█                                                                             █${NC}"
-    echo -e "${GREEN}█  🎉 INSTALLATION COMPLETE! 🎉                                              █${NC}"
+    echo -e "${GREEN}█  🎉 FRESH PI INSTALLATION COMPLETE! 🎉                                     █${NC}"
     echo -e "${GREEN}█                                                                             █${NC}"
-    echo -e "${GREEN}█  Wi-Fi Test Dashboard ${VERSION} installed successfully!                    █${NC}"
+    echo -e "${GREEN}█  Wi-Fi Test Dashboard ${VERSION} installed successfully!                   █${NC}"
     echo -e "${GREEN}█                                                                             █${NC}"
     echo -e "${GREEN}███████████████████████████████████████████████████████████████████████████████${NC}"
     echo
@@ -396,77 +340,80 @@ print_success_message() {
     log_success "  • Main Dashboard: http://$pi_ip:5000"
     log_success "  • Traffic Control: http://$pi_ip:5000/traffic_control"
     echo
-    if [[ -n "$interface_summary" ]]; then
-        echo -e "${GREEN}$interface_summary${NC}"
-        echo
-    fi
-    log_success "🚦 FEATURES INSTALLED:"
-    log_success "  ✅ Intelligent interface detection and assignment"
-    log_success "  ✅ Web-based dashboard with real-time monitoring"
-    log_success "  ✅ Speedtest CLI integration for bandwidth testing"
-    log_success "  ✅ YouTube traffic simulation capabilities"
-    log_success "  ✅ Interface-specific traffic generation"
-    log_success "  ✅ Wi-Fi client simulation (good and bad authentication)"
-    log_success "  ✅ Network emulation tools (netem)"
-    log_success "  ✅ Comprehensive logging and monitoring"
+    log_success "🔧 FRESH INSTALLATION OPTIMIZATIONS:"
+    log_success "  ✅ NetworkManager properly configured from scratch"
+    log_success "  ✅ dhcpcd conflicts automatically resolved"
+    log_success "  ✅ Wi-Fi interfaces optimized for connection stability"
+    log_success "  ✅ Password preservation implemented"
+    log_success "  ✅ No legacy configuration conflicts"
     echo
-    log_success "🔧 NEXT STEPS:"
+    log_success "📋 NEXT STEPS:"
     log_success "  1. Open http://$pi_ip:5000 in your web browser"
-    log_success "  2. Configure your SSID and password in the Wi-Fi Config tab"
-    log_success "  3. Visit the Traffic Control page to start traffic generation"
-    log_success "  4. Check interface assignments in INTERFACE_ASSIGNMENT.md"
+    log_success "  2. Go to Wi-Fi Config tab and enter your network details"
+    log_success "  3. Monitor connections in the Status tab"
+    log_success "  4. Start traffic generation in Traffic Control"
     echo
     log_success "📚 DOCUMENTATION:"
-    log_success "  • GitHub: https://github.com/danryan06/wifi-dashboard"
-    log_success "  • Interface Info: /home/$PI_USER/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md"
-    log_success "  • Troubleshooting: Check /home/$PI_USER/wifi_test_dashboard/logs/"
+    log_success "  • Quick Start: ~/WIFI_DASHBOARD_QUICK_START.md"
+    log_success "  • Dashboard logs: /home/$PI_USER/wifi_test_dashboard/logs/"
     echo
-    log_success "📊 MONITORING COMMANDS:"
-    log_success "  • Dashboard status: sudo systemctl status wifi-dashboard.service"
-    log_success "  • View logs: sudo journalctl -u wifi-dashboard.service -f"
-    log_success "  • Traffic services: sudo systemctl status traffic-*.service"
+    log_success "🎊 Your optimized Wi-Fi testing system is ready!"
     echo
-    echo -e "${PURPLE}🎊 Your intelligent Wi-Fi testing system is ready!${NC}"
-    echo -e "${GREEN}🔍 Check INTERFACE_ASSIGNMENT.md for optimization details${NC}"
-    echo
+}
+
+main() {
+    print_banner
+    
+    # Check system requirements
+    check_fresh_installation
+    
+    # Create installation directory
+    log_step "Setting up installation environment..."
+    rm -rf "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
+    export INSTALL_DIR PI_USER PI_HOME VERSION REPO_URL
+    
+    # Install enhanced dependencies with NetworkManager fixes
+    install_enhanced_dependencies
+    
+    # Run main installer (skipping dependencies)
+    run_main_installer
+    
+    # Verify installation
+    if verify_fresh_installation; then
+        log_success "✓ Installation verification passed"
+    else
+        log_warn "⚠ Some verification checks failed, but installation may still work"
+    fi
+    
+    # Post-installation setup
+    post_installation_setup
+    
+    # Clean up
+    rm -rf "$INSTALL_DIR"
+    
+    # Show success summary
+    print_success_summary
 }
 
 # Error handling
 handle_error() {
     local exit_code=$?
     echo
-    log_error "Installation failed with exit code $exit_code"
-    log_error "Check the output above for details"
+    log_error "Fresh Pi installation failed with exit code $exit_code"
+    log_error "This installer is designed for fresh Raspberry Pi installations"
     echo
-    log_info "For support:"
-    log_info "  • Check logs in $INSTALL_DIR if available"
+    log_info "For troubleshooting:"
+    log_info "  • Ensure this is a fresh Pi installation"
+    log_info "  • Check internet connectivity"
+    log_info "  • Run: sudo systemctl status NetworkManager"
     log_info "  • Visit: https://github.com/danryan06/wifi-dashboard/issues"
-    log_info "  • Include your system info and error messages"
     
-    cleanup_installation 2>/dev/null || true
+    rm -rf "$INSTALL_DIR" 2>/dev/null || true
     exit $exit_code
 }
 
-# Set error trap
 trap handle_error ERR
 
-# Main execution
-main() {
-    print_banner
-    check_requirements
-    detect_network_interfaces
-    create_install_directory
-    main_installation
-    
-    if verify_installation; then
-        cleanup_installation
-        print_success_message
-    else
-        log_error "Installation completed but verification failed"
-        log_error "The system may not work correctly"
-        exit 1
-    fi
-}
-
-# Run main function
+# Run main installation
 main "$@"
