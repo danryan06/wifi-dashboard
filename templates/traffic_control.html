@@ -45,21 +45,54 @@
         
         .nav-links {
             display: flex;
-            gap: 16px;
-            flex: 1;
+            gap: 8px;
+            margin-right: 24px;
         }
         
         .nav-link {
-            color: var(--muted);
-            text-decoration: none;
             padding: 8px 16px;
             border-radius: 6px;
+            background: rgba(255,255,255,0.05);
+            color: var(--muted);
+            text-decoration: none;
             transition: all 0.2s ease;
+            border: 1px solid transparent;
         }
         
-        .nav-link:hover, .nav-link.active {
-            color: var(--fg);
+        .nav-link:hover {
             background: rgba(255,255,255,0.1);
+            border-color: var(--accent);
+            color: var(--fg);
+        }
+        
+        .nav-link.active {
+            background: var(--accent);
+            color: white;
+        }
+        
+        .tabs { 
+            display: flex; 
+            gap: 8px; 
+            flex: 1; 
+        }
+        
+        .tab {
+            padding: 8px 16px; 
+            cursor: pointer; 
+            border-radius: 6px;
+            background: rgba(255,255,255,0.05); 
+            transition: all 0.2s ease;
+            border: 1px solid transparent;
+        }
+        
+        .tab:hover { 
+            background: rgba(255,255,255,0.1); 
+            border-color: var(--accent);
+        }
+        
+        .tab.active { 
+            background: var(--accent); 
+            color: #fff; 
         }
         
         .status-pill {
@@ -361,10 +394,19 @@
 </head>
 <body>
     <div class="topbar">
-        <div class="logo">🚦 Traffic Control</div>
+        <div class="logo">🌐 Wi-Fi Test Dashboard v5.0</div>
         <div class="nav-links">
             <a href="/" class="nav-link">📊 Dashboard</a>
             <a href="/traffic_control" class="nav-link active">🚦 Traffic Control</a>
+        </div>
+        <div class="tabs">
+            <div class="tab active" data-tab="status">📊 Status</div>
+            <div class="tab" data-tab="interfaces">🔌 Interfaces</div>
+            <div class="tab" data-tab="wifi">📶 Wi-Fi Config</div>
+            <div class="tab" data-tab="netem">🌐 Network Emulation</div>
+            <div class="tab" data-tab="services">⚙️ Services</div>
+            <div class="tab" data-tab="logs">📋 Logs</div>
+            <div class="tab" data-tab="controls">🔧 System</div>
         </div>
         <div class="status-pill" id="status-pill"><span class="spinner"></span> Loading...</div>
     </div>
@@ -434,6 +476,14 @@
     <script>
         let trafficData = {};
         let refreshInterval;
+        
+        // Tab switching (redirects to main dashboard)
+        document.querySelectorAll(".tab").forEach(tab => {
+            tab.onclick = () => {
+                // Redirect to main dashboard with the selected tab
+                window.location.href = `/?tab=${tab.dataset.tab}`;
+            };
+        });
         
         // Data refresh
         async function refreshStatus() {
@@ -610,8 +660,8 @@
         
         // Log viewing
         function viewLogs(interface) {
-            // For now, just show a message - in a full implementation this might open a modal or new page
-            showMessage(`Viewing logs for ${interface} - check main dashboard logs tab`, 'info');
+            // Redirect to main dashboard logs tab
+            window.location.href = `/?tab=logs&service=${interface}`;
         }
         
         // Utility functions

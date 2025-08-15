@@ -483,6 +483,11 @@
             border-left: 4px solid var(--accent);
         }
         
+        .throughput-item.offline {
+            border-left-color: var(--muted);
+            opacity: 0.7;
+        }
+        
         .throughput-header {
             display: flex;
             justify-content: space-between;
@@ -494,6 +499,10 @@
             font-weight: 600;
             color: var(--accent);
             font-size: 1.1em;
+        }
+        
+        .throughput-interface.offline {
+            color: var(--muted);
         }
         
         .throughput-status {
@@ -511,6 +520,11 @@
         
         .throughput-status.inactive {
             background: var(--error);
+            color: white;
+        }
+        
+        .throughput-status.offline {
+            background: var(--muted);
             color: white;
         }
         
@@ -544,6 +558,10 @@
         
         .metric-value.upload {
             color: #FF9800;
+        }
+        
+        .metric-value.offline {
+            color: var(--muted);
         }
         
         .throughput-bar {
@@ -938,6 +956,11 @@
         let refreshPaused = false;
         let throughputData = {};
         let previousStats = {};
+        let cumulativeStats = {
+            'eth0': { rx_bytes: 0, tx_bytes: 0 },
+            'wlan0': { rx_bytes: 0, tx_bytes: 0 },
+            'wlan1': { rx_bytes: 0, tx_bytes: 0 }
+        };
         
         // Tab switching
         document.querySelectorAll(".tab").forEach(tab => {
@@ -1075,7 +1098,7 @@
             }).join('');
         }
         
-        // Real-time throughput monitoring functions
+        // Real-time throughput monitoring functions - ENHANCED VERSION
         async function updateThroughputStats() {
             try {
                 const response = await fetch('/api/throughput');
@@ -1099,28 +1122,45 @@
 
         function updateThroughputDisplay(throughputData) {
             const container = document.getElementById('throughput-grid');
-            if (!throughputData || Object.keys(throughputData).length === 0) {
-                container.innerHTML = '<div class="throughput-item">No throughput data available</div>';
-                return;
-            }
             
-            // Filter to show only relevant interfaces (exclude wlan2 if inactive)
-            const interfaces = Object.keys(throughputData).filter(iface => 
-                iface !== 'lo' && !iface.includes('loopback') && 
-                (throughputData[iface].active || throughputData[iface].download > 0 || throughputData[iface].upload > 0)
-            );
+            // Always show all three interfaces
+            const allInterfaces = ['eth0', 'wlan0', 'wlan1'];
             
-            if (interfaces.length === 0) {
-                container.innerHTML = '<div class="throughput-item">No active network interfaces detected</div>';
-                return;
-            }
-            
-            container.innerHTML = interfaces.map(iface => {
-                const stats = throughputData[iface];
+            container.innerHTML = allInterfaces.map(iface => {
+                const stats = throughputData[iface] || { 
+                    download: 0, 
+                    upload: 0, 
+                    active: false, 
+                    rx_packets: 0, 
+                    tx_packets: 0 
+                };
                 
-                // Convert bytes/sec to Mbps (download/upload are in bytes/sec from your API)
+                // Check if interface exists in system
+                const interfaceExists = throughputData[iface] !== undefined;
+                const isOffline = !interfaceExists || (!stats.active && stats.download === 0 && stats.upload === 0);
+                
+                // Update cumulative stats if interface is active
+                if (interfaceExists && (stats.download > 0 || stats.upload > 0)) {
+                    if (!previousStats[iface]) {
+                        previousStats[iface] = { rx_bytes: 0, tx_bytes: 0 };
+                    }
+                    
+                    // Calculate bytes transferred since last update
+                    const timeDelta = 10; // 10 second refresh interval
+                    const newRxBytes = stats.download * timeDelta; // download is in bytes/sec
+                    const newTxBytes = stats.upload * timeDelta; // upload is in bytes/sec
+                    
+                    cumulativeStats[iface].rx_bytes += newRxBytes;
+                    cumulativeStats[iface].tx_bytes += newTxBytes;
+                }
+                
+                // Convert bytes/sec to Mbps for display
                 const downloadMbps = (stats.download * 8 / 1024 / 1024).toFixed(2);
                 const uploadMbps = (stats.upload * 8 / 1024 / 1024).toFixed(2);
+                
+                // Convert cumulative bytes to MB
+                const totalRxMB = (cumulativeStats[iface].rx_bytes / 1024 / 1024).toFixed(1);
+                const totalTxMB = (cumulativeStats[iface].tx_bytes / 1024 / 1024).toFixed(1);
                 
                 // Calculate bar width (scale to 100 Mbps max)
                 const maxMbps = 100;
@@ -1131,37 +1171,50 @@
                 const interfaceNames = {
                     'eth0': 'Ethernet',
                     'wlan0': 'Wi-Fi Primary (Good Client)',
-                    'wlan1': 'Wi-Fi Secondary (Bad Client)',
-                    'wlan2': 'Wi-Fi Tertiary'
+                    'wlan1': 'Wi-Fi Secondary (Bad Client)'
                 };
                 const displayName = interfaceNames[iface] || iface.toUpperCase();
                 
+                // Determine status
+                let statusText = 'OFFLINE';
+                let statusClass = 'offline';
+                
+                if (interfaceExists) {
+                    if (stats.active) {
+                        statusText = 'ACTIVE';
+                        statusClass = 'active';
+                    } else {
+                        statusText = 'IDLE';
+                        statusClass = 'inactive';
+                    }
+                }
+                
                 return `
-                    <div class="throughput-item">
+                    <div class="throughput-item ${isOffline ? 'offline' : ''}">
                         <div class="throughput-header">
-                            <div class="throughput-interface">${displayName}</div>
-                            <div class="throughput-status ${stats.active ? 'active' : 'inactive'}">
-                                ${stats.active ? 'ACTIVE' : 'IDLE'}
+                            <div class="throughput-interface ${isOffline ? 'offline' : ''}">${displayName}</div>
+                            <div class="throughput-status ${statusClass}">
+                                ${statusText}
                             </div>
                         </div>
                         <div class="throughput-metrics">
                             <div class="metric-item">
                                 <div class="metric-label">⬇️ Download</div>
-                                <div class="metric-value download">${downloadMbps} Mbps</div>
+                                <div class="metric-value download ${isOffline ? 'offline' : ''}">${isOffline ? '0.00' : downloadMbps} Mbps</div>
                                 <div class="throughput-bar">
-                                    <div class="throughput-progress" style="width: ${downloadPercent}%; background: var(--success);"></div>
+                                    <div class="throughput-progress" style="width: ${isOffline ? 0 : downloadPercent}%; background: var(--success);"></div>
                                 </div>
                             </div>
                             <div class="metric-item">
                                 <div class="metric-label">⬆️ Upload</div>
-                                <div class="metric-value upload">${uploadMbps} Mbps</div>
+                                <div class="metric-value upload ${isOffline ? 'offline' : ''}">${isOffline ? '0.00' : uploadMbps} Mbps</div>
                                 <div class="throughput-bar">
-                                    <div class="throughput-progress" style="width: ${uploadPercent}%; background: var(--warning);"></div>
+                                    <div class="throughput-progress" style="width: ${isOffline ? 0 : uploadPercent}%; background: var(--warning);"></div>
                                 </div>
                             </div>
                         </div>
                         <div style="margin-top: 12px; font-size: 0.8em; color: var(--muted);">
-                            📦 RX: ${stats.rx_packets || 0} packets | TX: ${stats.tx_packets || 0} packets
+                            📦 Total: ⬇️ ${totalRxMB} MB | ⬆️ ${totalTxMB} MB
                         </div>
                     </div>
                 `;
@@ -1170,18 +1223,29 @@
 
         function showFallbackThroughput() {
             const container = document.getElementById('throughput-grid');
-            container.innerHTML = `
-                <div class="throughput-item">
-                    <div class="throughput-header">
-                        <div class="throughput-interface">Throughput Monitoring</div>
-                        <div class="throughput-status inactive">UNAVAILABLE</div>
+            
+            // Still show all three interfaces even in fallback mode
+            const allInterfaces = ['eth0', 'wlan0', 'wlan1'];
+            const interfaceNames = {
+                'eth0': 'Ethernet',
+                'wlan0': 'Wi-Fi Primary (Good Client)',
+                'wlan1': 'Wi-Fi Secondary (Bad Client)'
+            };
+            
+            container.innerHTML = allInterfaces.map(iface => {
+                const displayName = interfaceNames[iface];
+                return `
+                    <div class="throughput-item offline">
+                        <div class="throughput-header">
+                            <div class="throughput-interface offline">${displayName}</div>
+                            <div class="throughput-status offline">UNAVAILABLE</div>
+                        </div>
+                        <div style="text-align: center; color: var(--muted); padding: 20px;">
+                            Real-time monitoring unavailable
+                        </div>
                     </div>
-                    <div style="text-align: center; color: var(--muted); padding: 20px;">
-                        Real-time throughput monitoring is currently unavailable.<br>
-                        Check that the /api/throughput endpoint is working.
-                    </div>
-                </div>
-            `;
+                `;
+            }).join('');
         }
         
         function updateStatusPill(text, color) {
