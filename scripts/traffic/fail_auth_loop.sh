@@ -390,7 +390,7 @@ cleanup_and_exit() {
 }
 
 # Signal handlers
-trap cleanup_and_exit SIGTERM SIGINT EXIT
+trap cleanup_and_exit SIGTERM SIGINT
 
 # Initial setup
 log_msg "Wi-Fi Bad Client Simulation Starting..."

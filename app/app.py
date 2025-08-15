@@ -464,6 +464,233 @@ def shutdown():
     except Exception as e:
         logger.error(f"Error shutting down: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+    
+# Add this to app.py to display interface assignments in the dashboard
+
+def get_interface_assignments():
+    """Read and return interface assignment information"""
+    assignments_file = os.path.join(BASE_DIR, "configs", "interface-assignments.conf")
+    assignments = {
+        'good_interface': 'wlan0',
+        'good_type': 'unknown',
+        'bad_interface': 'wlan1', 
+        'bad_type': 'unknown',
+        'auto_detected': False
+    }
+    
+    try:
+        if os.path.exists(assignments_file):
+            with open(assignments_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('#') or '=' not in line:
+                        continue
+                    
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    
+                    if key == 'WIFI_GOOD_INTERFACE':
+                        assignments['good_interface'] = value
+                    elif key == 'WIFI_GOOD_INTERFACE_TYPE':
+                        assignments['good_type'] = value
+                    elif key == 'WIFI_BAD_INTERFACE':
+                        assignments['bad_interface'] = value if value != 'none' else None
+                    elif key == 'WIFI_BAD_INTERFACE_TYPE':
+                        assignments['bad_type'] = value
+            
+            assignments['auto_detected'] = True
+    except Exception as e:
+        logger.error(f"Error reading interface assignments: {e}")
+    
+    return assignments
+
+def get_interface_capabilities():
+    """Get detailed interface capabilities and status"""
+    interfaces = {}
+    
+    try:
+        # Get all network interfaces
+        result = subprocess.run(['ip', 'link', 'show'], capture_output=True, text=True, timeout=5)
+        
+        for line in result.stdout.splitlines():
+            if ':' in line and ('wlan' in line or 'eth' in line):
+                parts = line.split(':')
+                if len(parts) >= 2:
+                    iface = parts[1].strip()
+                    
+                    # Get basic info
+                    state = 'DOWN'
+                    if 'state UP' in line:
+                        state = 'UP'
+                    elif 'state DOWN' in line:
+                        state = 'DOWN'
+                    
+                    # Get IP address
+                    ip_result = subprocess.run(['ip', 'addr', 'show', iface], 
+                                             capture_output=True, text=True, timeout=5)
+                    ip_addr = None
+                    for ip_line in ip_result.stdout.splitlines():
+                        if 'inet ' in ip_line and '127.0.0.1' not in ip_line:
+                            ip_addr = ip_line.strip().split()[1]
+                            break
+                    
+                    # Determine interface type
+                    iface_type = 'unknown'
+                    capabilities = []
+                    
+                    if iface.startswith('eth'):
+                        iface_type = 'ethernet'
+                        capabilities = ['wired', 'high_bandwidth']
+                    elif iface.startswith('wlan'):
+                        iface_type = 'wifi'
+                        
+                        # Try to determine if built-in or USB
+                        try:
+                            device_path = os.readlink(f'/sys/class/net/{iface}/device')
+                            if 'mmc' in device_path or 'sdio' in device_path:
+                                capabilities.append('builtin')
+                                # Check if it's a dual-band Pi
+                                with open('/proc/cpuinfo', 'r') as f:
+                                    cpuinfo = f.read()
+                                    if any(model in cpuinfo for model in ['Raspberry Pi 4', 'Raspberry Pi 3 Model B Plus', 'Raspberry Pi Zero 2']):
+                                        capabilities.append('dual_band')
+                                    else:
+                                        capabilities.append('2.4ghz_only')
+                            elif 'usb' in device_path:
+                                capabilities.append('usb')
+                                capabilities.append('2.4ghz_only')  # Assume 2.4GHz unless detected otherwise
+                        except:
+                            capabilities.append('unknown_type')
+                    
+                    # Get wireless info if available
+                    wireless_info = {}
+                    if iface.startswith('wlan'):
+                        try:
+                            # Try to get current connection info
+                            nm_result = subprocess.run(['nmcli', '-t', '-f', 'ACTIVE,SSID,SIGNAL,FREQ', 'dev', 'wifi'], 
+                                                     capture_output=True, text=True, timeout=5)
+                            for nm_line in nm_result.stdout.splitlines():
+                                if nm_line.startswith('yes:'):
+                                    parts = nm_line.split(':')
+                                    if len(parts) >= 4:
+                                        wireless_info = {
+                                            'ssid': parts[1] if parts[1] else None,
+                                            'signal': parts[2] if parts[2] else None,
+                                            'frequency': parts[3] if parts[3] else None
+                                        }
+                        except:
+                            pass
+                    
+                    interfaces[iface] = {
+                        'name': iface,
+                        'type': iface_type,
+                        'state': state,
+                        'ip_address': ip_addr,
+                        'capabilities': capabilities,
+                        'wireless_info': wireless_info
+                    }
+                    
+    except Exception as e:
+        logger.error(f"Error getting interface capabilities: {e}")
+    
+    return interfaces
+
+# Update the status endpoint to include interface assignment info
+@app.route("/status")
+def status():
+    """API endpoint for status information"""
+    try:
+        ssid, password = read_config()
+        system_info = get_system_info()
+        service_status = get_service_status()
+        interface_assignments = get_interface_assignments()
+        interface_capabilities = get_interface_capabilities()
+        
+        # Get recent logs from all services
+        logs = {
+            'main': read_log_file('main.log', 10),
+            'wired': read_log_file('wired.log', 10),
+            'wifi-good': read_log_file('wifi-good.log', 10),
+            'wifi-bad': read_log_file('wifi-bad.log', 10),
+            'traffic-eth0': read_log_file('traffic-eth0.log', 10),
+            'traffic-wlan0': read_log_file('traffic-wlan0.log', 10),
+            'traffic-wlan1': read_log_file('traffic-wlan1.log', 10)
+        }
+        
+        return jsonify({
+            "ssid": ssid,
+            "password_masked": "*" * len(password) if password else "",
+            "system_info": system_info,
+            "service_status": service_status,
+            "interface_assignments": interface_assignments,
+            "interface_capabilities": interface_capabilities,
+            "logs": logs,
+            "success": True
+        })
+    except Exception as e:
+        logger.error(f"Error in status endpoint: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Add new endpoint for interface information
+@app.route("/api/interfaces")
+def api_interfaces():
+    """API endpoint for detailed interface information"""
+    try:
+        interface_assignments = get_interface_assignments()
+        interface_capabilities = get_interface_capabilities()
+        
+        # Combine assignment and capability data
+        interface_data = {}
+        
+        # Add assignment info
+        if interface_assignments['good_interface']:
+            good_iface = interface_assignments['good_interface']
+            interface_data[good_iface] = interface_capabilities.get(good_iface, {})
+            interface_data[good_iface].update({
+                'assignment': 'good_client',
+                'assignment_type': interface_assignments['good_type'],
+                'description': 'Wi-Fi Good Client (Successful Authentication)'
+            })
+        
+        if interface_assignments['bad_interface']:
+            bad_iface = interface_assignments['bad_interface']
+            interface_data[bad_iface] = interface_capabilities.get(bad_iface, {})
+            interface_data[bad_iface].update({
+                'assignment': 'bad_client', 
+                'assignment_type': interface_assignments['bad_type'],
+                'description': 'Wi-Fi Bad Client (Authentication Failures)'
+            })
+        
+        # Add ethernet
+        if 'eth0' in interface_capabilities:
+            interface_data['eth0'] = interface_capabilities['eth0']
+            interface_data['eth0'].update({
+                'assignment': 'wired_client',
+                'assignment_type': 'ethernet',
+                'description': 'Wired Ethernet Client'
+            })
+        
+        # Add any unassigned interfaces
+        for iface, data in interface_capabilities.items():
+            if iface not in interface_data:
+                interface_data[iface] = data
+                interface_data[iface].update({
+                    'assignment': 'unassigned',
+                    'assignment_type': 'none',
+                    'description': 'Unassigned Interface'
+                })
+        
+        return jsonify({
+            "success": True,
+            "auto_detected": interface_assignments['auto_detected'],
+            "interfaces": interface_data,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in interfaces endpoint: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     log_action("Wi-Fi Test Dashboard v5.0 starting")
