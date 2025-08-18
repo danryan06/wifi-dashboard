@@ -10,9 +10,13 @@ INTENSITY="${3:-medium}"
 
 LOG_FILE="/home/pi/wifi_test_dashboard/logs/traffic-${INTERFACE}.log"
 SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
+LOG_ROTATION_UTILS="/home/pi/wifi_test_dashboard/scripts/log_rotation_utils.sh"
 
 # Source settings if available
 [[ -f "$SETTINGS" ]] && source "$SETTINGS"
+
+# Source log rotation utilities if available
+[[ -f "$LOG_ROTATION_UTILS" ]] && source "$LOG_ROTATION_UTILS"
 
 # Traffic intensity settings
 case "$INTENSITY" in
@@ -55,8 +59,28 @@ DOWNLOAD_URLS=(
     "https://releases.ubuntu.com/20.04/ubuntu-20.04.6-desktop-amd64.iso"
 )
 
+# Enhanced logging function with automatic rotation
 log_msg() {
-    echo "[$(date '+%F %T')] TRAFFIC-${INTERFACE^^}: $1" | tee -a "$LOG_FILE"
+    local message="$1"
+    local component="TRAFFIC-${INTERFACE^^}"
+    
+    # Use log rotation utility if available, otherwise fall back to simple logging
+    if command -v log_msg_with_rotation >/dev/null 2>&1; then
+        log_msg_with_rotation "$LOG_FILE" "$message" "$component"
+    else
+        # Fallback to basic logging with manual rotation check
+        echo "[$(date '+%F %T')] $component: $message" | tee -a "$LOG_FILE"
+        
+        # Basic size check - rotate if over 10MB
+        if [[ -f "$LOG_FILE" ]]; then
+            local size_mb=$(du -m "$LOG_FILE" 2>/dev/null | cut -f1 || echo "0")
+            if [[ $size_mb -gt 10 ]]; then
+                mv "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null || true
+                touch "$LOG_FILE"
+                echo "[$(date '+%F %T')] $component: Log rotated (was ${size_mb}MB)" | tee -a "$LOG_FILE"
+            fi
+        fi
+    fi
 }
 
 # Check if interface exists and is up
@@ -135,10 +159,15 @@ run_interface_speedtest() {
                 continue
             fi
             
-            if timeout 120 $speedtest_cmd 2>&1 | tee -a "$LOG_FILE"; then
+            if timeout 120 $speedtest_cmd >/dev/null 2>&1; then
                 log_msg "✓ Speedtest completed on $INTERFACE"
             else
                 log_msg "✗ Speedtest failed on $INTERFACE"
+            fi
+            
+            # Enable log rotation check after significant operations
+            if command -v enable_log_rotation_for_file >/dev/null 2>&1; then
+                enable_log_rotation_for_file "$LOG_FILE"
             fi
         else
             log_msg "Interface $INTERFACE not ready for speedtest"
@@ -179,6 +208,11 @@ run_interface_downloads() {
                 # Wait for all downloads to complete
                 wait
                 log_msg "✓ All concurrent downloads completed on $INTERFACE"
+                
+                # Check for log rotation after bulk operations
+                if command -v enable_log_rotation_for_file >/dev/null 2>&1; then
+                    enable_log_rotation_for_file "$LOG_FILE"
+                fi
             else
                 log_msg "No IP address on $INTERFACE for downloads"
             fi
@@ -187,7 +221,7 @@ run_interface_downloads() {
     done
 }
 
-# YouTube traffic generation
+# YouTube traffic generation with enhanced logging
 run_youtube_traffic() {
     # Check if yt-dlp or youtube-dl is available
     local youtube_cmd=""
@@ -235,6 +269,11 @@ run_youtube_traffic() {
                 
                 # Clean up downloaded files
                 rm -rf "$temp_dir"
+                
+                # Check for log rotation after YouTube operations
+                if command -v enable_log_rotation_for_file >/dev/null 2>&1; then
+                    enable_log_rotation_for_file "$LOG_FILE"
+                fi
             else
                 log_msg "No IP address on $INTERFACE for YouTube traffic"
             fi
@@ -266,6 +305,13 @@ run_interface_ping_traffic() {
 # Main traffic generation controller
 main_traffic_loop() {
     log_msg "Starting traffic generation on $INTERFACE (type: $TRAFFIC_TYPE, intensity: $INTENSITY)"
+    
+    # Show log rotation status if available
+    if command -v show_log_rotation_status >/dev/null 2>&1; then
+        show_log_rotation_status "$LOG_FILE" | while read -r line; do
+            log_msg "LOG-INFO: $line"
+        done
+    fi
     
     # Setup interface-specific routing
     setup_interface_routing
@@ -319,12 +365,23 @@ main_traffic_loop() {
         pids+=($PING_PID)
     fi
     
-    # Wait for any child process to exit (shouldn't happen in normal operation)
-    wait -n
-    
-    # If we get here, something went wrong
-    log_msg "⚠ Traffic generator exited unexpectedly, cleaning up..."
-    cleanup_and_exit
+    # Monitor and periodic log rotation
+    while true; do
+        # Check if any process has died
+        for pid in "${pids[@]}"; do
+            if ! kill -0 "$pid" 2>/dev/null; then
+                log_msg "⚠ Traffic generator process $pid has died, restarting main loop"
+                cleanup_and_exit
+            fi
+        done
+        
+        # Periodic log rotation check (every 5 minutes)
+        if command -v enable_log_rotation_for_file >/dev/null 2>&1; then
+            enable_log_rotation_for_file "$LOG_FILE"
+        fi
+        
+        sleep 300  # Check every 5 minutes
+    done
 }
 
 # Cleanup function
@@ -342,6 +399,11 @@ cleanup_and_exit() {
     
     # Clean up routing
     cleanup_interface_routing
+    
+    # Final log rotation check
+    if command -v enable_log_rotation_for_file >/dev/null 2>&1; then
+        enable_log_rotation_for_file "$LOG_FILE"
+    fi
     
     log_msg "Traffic generation cleanup completed for $INTERFACE"
     exit 0
@@ -362,6 +424,9 @@ if [[ ! "$INTENSITY" =~ ^(light|medium|heavy)$ ]]; then
     log_msg "Valid intensities: light, medium, heavy"
     exit 1
 fi
+
+# Ensure log directory exists
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
 # Initial interface check
 if ! check_interface; then

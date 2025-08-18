@@ -235,30 +235,43 @@
             font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
         }
         
+        /* Enhanced Log Container Styles */
         .log-container {
-            max-height: 500px; 
-            overflow-y: auto; 
+            height: 600px; 
             border: 1px solid var(--border);
             border-radius: 12px; 
             background: #0a0f1f;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .log-header {
+            background: rgba(255,255,255,0.05);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
         }
         
         .log-tabs {
             display: flex;
-            background: rgba(255,255,255,0.05);
-            border-bottom: 1px solid var(--border);
+            gap: 4px;
         }
         
         .log-tab {
             display: inline-block; 
-            padding: 12px 16px; 
+            padding: 8px 12px; 
             background: transparent;
             border: none; 
             color: var(--muted); 
             cursor: pointer; 
             margin: 0;
             transition: all 0.2s ease;
-            border-bottom: 2px solid transparent;
+            border-radius: 6px;
+            font-size: 0.85em;
         }
         
         .log-tab:hover {
@@ -269,16 +282,96 @@
         .log-tab.active { 
             background: var(--accent); 
             color: white;
-            border-bottom-color: var(--accent);
+        }
+        
+        .log-info {
+            font-size: 0.8em;
+            color: var(--muted);
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+        
+        .log-controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .log-controls button {
+            padding: 6px 12px;
+            font-size: 0.8em;
+            margin: 0;
+        }
+        
+        .log-content-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
         
         .log-content {
+            flex: 1;
             padding: 16px; 
             white-space: pre-wrap; 
             font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
             font-size: 12px; 
-            line-height: 1.5;
+            line-height: 1.4;
             color: var(--fg);
+            overflow-y: auto;
+            overflow-x: auto;
+            background: linear-gradient(to bottom, rgba(255,255,255,0.02), transparent 20px);
+        }
+        
+        .log-content::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        .log-content::-webkit-scrollbar-track {
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+        }
+        
+        .log-content::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.3);
+            border-radius: 4px;
+        }
+        
+        .log-content::-webkit-scrollbar-thumb:hover {
+            background: rgba(255,255,255,0.5);
+        }
+        
+        .log-loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--muted);
+        }
+        
+        .log-pagination {
+            padding: 12px 16px;
+            border-top: 1px solid var(--border);
+            background: rgba(255,255,255,0.03);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85em;
+        }
+        
+        .pagination-info {
+            color: var(--muted);
+        }
+        
+        .pagination-controls {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .pagination-controls button {
+            padding: 6px 12px;
+            font-size: 0.8em;
+            margin: 0;
         }
         
         .service-controls {
@@ -430,6 +523,10 @@
             
             .content {
                 padding: 16px;
+            }
+            
+            .log-container {
+                height: 400px;
             }
         }
         
@@ -919,20 +1016,46 @@
             <div class="service-controls" id="service-controls">Loading...</div>
         </div>
 
-        <!-- Logs Tab -->
+        <!-- Enhanced Logs Tab -->
         <div id="logs" class="card hidden">
             <h2>📋 System Logs</h2>
             <div class="log-container">
-                <div class="log-tabs">
-                    <button class="log-tab active" data-log="main">📄 Main</button>
-                    <button class="log-tab" data-log="wired">🔌 Wired</button>
-                    <button class="log-tab" data-log="wifi-good">✅ Wi-Fi Good</button>
-                    <button class="log-tab" data-log="wifi-bad">❌ Wi-Fi Bad</button>
+                <div class="log-header">
+                    <div class="log-tabs">
+                        <button class="log-tab active" data-log="main">📄 Main</button>
+                        <button class="log-tab" data-log="wired">🔌 Wired</button>
+                        <button class="log-tab" data-log="wifi-good">✅ Wi-Fi Good</button>
+                        <button class="log-tab" data-log="wifi-bad">❌ Wi-Fi Bad</button>
+                        <button class="log-tab" data-log="traffic-eth0">🌐 ETH0</button>
+                        <button class="log-tab" data-log="traffic-wlan0">📡 WLAN0</button>
+                        <button class="log-tab" data-log="traffic-wlan1">📡 WLAN1</button>
+                    </div>
+                    <div class="log-info">
+                        <span id="log-info-text">Select a log to view</span>
+                    </div>
+                    <div class="log-controls">
+                        <button onclick="refreshCurrentLog()" class="secondary">🔄 Refresh</button>
+                        <button onclick="loadMoreLines()" class="secondary">📄 More Lines</button>
+                        <button onclick="loadAllLines()" class="secondary">📋 All</button>
+                        <button onclick="clearLogView()" class="secondary">🗑️ Clear View</button>
+                    </div>
                 </div>
-                <div class="log-content" id="log-content">Loading logs...</div>
+                <div class="log-content-wrapper">
+                    <div class="log-content" id="log-content">
+                        <div class="log-loading">
+                            <span class="spinner"></span> Loading logs...
+                        </div>
+                    </div>
+                </div>
+                <div class="log-pagination" id="log-pagination">
+                    <div class="pagination-info" id="pagination-info">Ready to load logs</div>
+                    <div class="pagination-controls">
+                        <button onclick="scrollToTop()" class="secondary">⬆️ Top</button>
+                        <button onclick="scrollToBottom()" class="secondary">⬇️ Bottom</button>
+                        <button onclick="toggleAutoScroll()" class="secondary" id="auto-scroll-btn">🔄 Auto-scroll: Off</button>
+                    </div>
+                </div>
             </div>
-            <button onclick="refreshLogs()" class="secondary" style="margin-top: 16px;">🔄 Refresh Logs</button>
-            <button onclick="downloadLogs()" class="secondary">💾 Download All Logs</button>
         </div>
 
         <!-- System Controls Tab -->
@@ -962,6 +1085,13 @@
             'wlan1': { rx_bytes: 0, tx_bytes: 0 }
         };
         
+        // Enhanced log viewing variables
+        let currentLogName = 'main';
+        let currentLogOffset = 0;
+        let currentLogLines = 200;
+        let autoScrollEnabled = false;
+        let logCache = {};
+        
         // Tab switching
         document.querySelectorAll(".tab").forEach(tab => {
             tab.onclick = () => switchTab(tab.dataset.tab);
@@ -979,22 +1109,165 @@
             if (tabName === 'interfaces') {
                 updateInterfaceAssignments();
             }
+            
+            // Load logs when logs tab is opened
+            if (tabName === 'logs') {
+                loadCurrentLog();
+            }
         }
         
-        // Log tab switching
+        // Enhanced log tab switching
         document.addEventListener('click', function(e) {
             if (e.target.classList.contains('log-tab')) {
                 document.querySelectorAll('.log-tab').forEach(t => t.classList.remove('active'));
                 e.target.classList.add('active');
-                updateLogContent(e.target.dataset.log);
+                currentLogName = e.target.dataset.log;
+                currentLogOffset = 0; // Reset offset when switching logs
+                loadCurrentLog();
             }
         });
+        
+        // Enhanced log functions
+        async function loadCurrentLog() {
+            try {
+                showLogLoading();
+                
+                const response = await fetch(`/api/logs/${currentLogName}?lines=${currentLogLines}&offset=${currentLogOffset}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        displayLogContent(data);
+                        updateLogInfo(data);
+                    } else {
+                        showLogError('Failed to load log: ' + data.error);
+                    }
+                } else {
+                    showLogError('Log API not available');
+                }
+            } catch (error) {
+                console.error('Error loading log:', error);
+                showLogError('Error loading log: ' + error.message);
+            }
+        }
+        
+        function displayLogContent(data) {
+            const logContent = document.getElementById('log-content');
+            
+            if (data.content && data.content.length > 0) {
+                logContent.textContent = data.content.join('');
+                
+                // Auto-scroll to bottom if enabled
+                if (autoScrollEnabled) {
+                    logContent.scrollTop = logContent.scrollHeight;
+                }
+            } else {
+                logContent.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--muted);">No log entries found</div>';
+            }
+        }
+        
+        function updateLogInfo(data) {
+            const logInfoText = document.getElementById('log-info-text');
+            const paginationInfo = document.getElementById('pagination-info');
+            
+            if (data.info && data.info.exists) {
+                logInfoText.textContent = `${data.info.size_mb}MB • ${data.info.line_count} lines • Modified: ${data.info.last_modified}`;
+                paginationInfo.textContent = `Showing ${data.lines_returned} lines`;
+            } else {
+                logInfoText.textContent = 'Log file not found';
+                paginationInfo.textContent = 'No data';
+            }
+        }
+        
+        function showLogLoading() {
+            const logContent = document.getElementById('log-content');
+            logContent.innerHTML = '<div class="log-loading"><span class="spinner"></span> Loading logs...</div>';
+        }
+        
+        function showLogError(message) {
+            const logContent = document.getElementById('log-content');
+            logContent.innerHTML = `<div style="text-align: center; padding: 40px; color: var(--error);">⚠️ ${message}</div>`;
+        }
+        
+        async function refreshCurrentLog() {
+            currentLogOffset = 0; // Reset to get latest entries
+            await loadCurrentLog();
+            showMessage('Log refreshed', 'info');
+        }
+        
+        async function loadMoreLines() {
+            currentLogLines = Math.min(currentLogLines + 200, 1000); // Cap at 1000 lines
+            currentLogOffset = 0; // Reset offset to get from the end
+            await loadCurrentLog();
+            showMessage(`Loaded ${currentLogLines} lines`, 'info');
+        }
+        
+        async function loadAllLines() {
+            if (!confirm('Loading all lines may take time for large logs. Continue?')) return;
+            
+            try {
+                showLogLoading();
+                const response = await fetch(`/api/logs/${currentLogName}?all=true`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        displayLogContent(data);
+                        updateLogInfo(data);
+                        showMessage(`Loaded all ${data.lines_returned} lines`, 'success');
+                    } else {
+                        showLogError('Failed to load all lines: ' + data.error);
+                    }
+                } else {
+                    showLogError('Failed to load all lines');
+                }
+            } catch (error) {
+                showLogError('Error loading all lines: ' + error.message);
+            }
+        }
+        
+        function clearLogView() {
+            const logContent = document.getElementById('log-content');
+            logContent.textContent = '';
+            showMessage('Log view cleared', 'info');
+        }
+        
+        function scrollToTop() {
+            const logContent = document.getElementById('log-content');
+            logContent.scrollTop = 0;
+        }
+        
+        function scrollToBottom() {
+            const logContent = document.getElementById('log-content');
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+        
+        function toggleAutoScroll() {
+            autoScrollEnabled = !autoScrollEnabled;
+            const btn = document.getElementById('auto-scroll-btn');
+            btn.textContent = `🔄 Auto-scroll: ${autoScrollEnabled ? 'On' : 'Off'}`;
+            
+            if (autoScrollEnabled) {
+                btn.classList.remove('secondary');
+                scrollToBottom();
+            } else {
+                btn.classList.add('secondary');
+            }
+        }
         
         function updateLogContent(logType) {
             const logContent = document.getElementById('log-content');
             if (currentData.logs && currentData.logs[logType]) {
                 logContent.textContent = currentData.logs[logType].join('');
-                logContent.scrollTop = logContent.scrollHeight;
+                if (autoScrollEnabled) {
+                    logContent.scrollTop = logContent.scrollHeight;
+                }
+                
+                // Update log info if available
+                if (currentData.log_info && currentData.log_info[logType]) {
+                    updateLogInfo({
+                        info: currentData.log_info[logType],
+                        lines_returned: currentData.logs[logType].length
+                    });
+                }
             } else {
                 logContent.textContent = 'No logs available for ' + logType;
             }
@@ -1061,10 +1334,17 @@
             // Update services
             updateServiceControls(data.service_status || {});
             
-            // Update logs
-            const activeLogTab = document.querySelector('.log-tab.active');
-            if (activeLogTab) {
-                updateLogContent(activeLogTab.dataset.log);
+            // Update logs if on logs tab and using basic display
+            const logsTab = document.getElementById('logs');
+            if (!logsTab.classList.contains('hidden')) {
+                const activeLogTab = document.querySelector('.log-tab.active');
+                if (activeLogTab && currentData.logs) {
+                    // Only update if we're showing the basic log view (not enhanced)
+                    const logContent = document.getElementById('log-content');
+                    if (logContent.innerHTML.includes('Loading logs...')) {
+                        updateLogContent(activeLogTab.dataset.log);
+                    }
+                }
             }
         }
         
@@ -1572,16 +1852,6 @@
             } catch (error) {
                 showMessage(`Error: ${error.message}`, 'error');
             }
-        }
-        
-        // Log functions
-        function refreshLogs() {
-            refreshData();
-            showMessage('Logs refreshed', 'info');
-        }
-        
-        function downloadLogs() {
-            showMessage('Log download feature not yet implemented', 'warning');
         }
         
         // Utility functions

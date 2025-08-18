@@ -19,7 +19,7 @@ LOG_DIR = os.path.join(BASE_DIR, "logs")
 last_stats = {}
 last_stats_time = 0
 
-# Setup logging
+# Setup logging with rotation
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -31,8 +31,37 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def log_action(msg):
-    """Log action to main log file"""
+    """Log action to main log file with rotation"""
     logger.info(msg)
+    # Check if main log needs rotation
+    rotate_log_if_needed(os.path.join(LOG_DIR, "main.log"))
+
+def rotate_log_if_needed(log_path, max_size_mb=10, keep_backups=5):
+    """Rotate log file if it exceeds max_size_mb"""
+    try:
+        if not os.path.exists(log_path):
+            return
+        
+        # Check file size
+        size_mb = os.path.getsize(log_path) / (1024 * 1024)
+        if size_mb > max_size_mb:
+            # Rotate existing backups
+            for i in range(keep_backups - 1, 0, -1):
+                old_backup = f"{log_path}.{i}"
+                new_backup = f"{log_path}.{i + 1}"
+                if os.path.exists(old_backup):
+                    if i == keep_backups - 1:
+                        os.remove(old_backup)  # Remove oldest
+                    else:
+                        os.rename(old_backup, new_backup)
+            
+            # Move current log to .1
+            if os.path.exists(log_path):
+                os.rename(log_path, f"{log_path}.1")
+            
+            logger.info(f"Rotated log file: {log_path} (was {size_mb:.1f}MB)")
+    except Exception as e:
+        logger.error(f"Error rotating log {log_path}: {e}")
 
 def read_config():
     """Read SSID configuration"""
@@ -62,17 +91,48 @@ def write_config(ssid, password):
         logger.error(f"Error writing config: {e}")
         return False
 
-def read_log_file(log_file, lines=20):
-    """Read last N lines from log file"""
+def read_log_file(log_file, lines=100, offset=0):
+    """Read lines from log file with support for pagination and larger amounts"""
     log_path = os.path.join(LOG_DIR, log_file)
     try:
         if os.path.exists(log_path):
             with open(log_path, 'r') as f:
-                return f.readlines()[-lines:]
+                all_lines = f.readlines()
+                
+            # If offset is provided, start from that line
+            if offset > 0:
+                all_lines = all_lines[offset:]
+            
+            # Return the requested number of lines, or all if less available
+            if lines == -1:  # -1 means return all lines
+                return all_lines
+            else:
+                return all_lines[-lines:] if not offset else all_lines[:lines]
         return []
     except Exception as e:
         logger.error(f"Error reading log file {log_file}: {e}")
         return [f"Error reading log: {e}"]
+
+def get_log_file_info(log_file):
+    """Get information about a log file (size, line count, etc.)"""
+    log_path = os.path.join(LOG_DIR, log_file)
+    try:
+        if os.path.exists(log_path):
+            size = os.path.getsize(log_path)
+            with open(log_path, 'r') as f:
+                line_count = sum(1 for _ in f)
+            
+            return {
+                'exists': True,
+                'size_bytes': size,
+                'size_mb': round(size / (1024 * 1024), 2),
+                'line_count': line_count,
+                'last_modified': datetime.fromtimestamp(os.path.getmtime(log_path)).strftime('%Y-%m-%d %H:%M:%S')
+            }
+        return {'exists': False}
+    except Exception as e:
+        logger.error(f"Error getting log file info {log_file}: {e}")
+        return {'exists': False, 'error': str(e)}
 
 def get_network_stats():
     """Get network interface statistics from /proc/net/dev"""
@@ -355,16 +415,21 @@ def status():
         interface_assignments = get_interface_assignments()
         interface_capabilities = get_interface_capabilities()
         
-        # Get recent logs from all services
+        # Get recent logs from all services - increased to 50 lines
         logs = {
-            'main': read_log_file('main.log', 10),
-            'wired': read_log_file('wired.log', 10),
-            'wifi-good': read_log_file('wifi-good.log', 10),
-            'wifi-bad': read_log_file('wifi-bad.log', 10),
-            'traffic-eth0': read_log_file('traffic-eth0.log', 10),
-            'traffic-wlan0': read_log_file('traffic-wlan0.log', 10),
-            'traffic-wlan1': read_log_file('traffic-wlan1.log', 10)
+            'main': read_log_file('main.log', 50),
+            'wired': read_log_file('wired.log', 50),
+            'wifi-good': read_log_file('wifi-good.log', 50),
+            'wifi-bad': read_log_file('wifi-bad.log', 50),
+            'traffic-eth0': read_log_file('traffic-eth0.log', 50),
+            'traffic-wlan0': read_log_file('traffic-wlan0.log', 50),
+            'traffic-wlan1': read_log_file('traffic-wlan1.log', 50)
         }
+        
+        # Get log file information
+        log_info = {}
+        for log_name in logs.keys():
+            log_info[log_name] = get_log_file_info(f'{log_name}.log')
         
         return jsonify({
             "ssid": ssid,
@@ -374,10 +439,46 @@ def status():
             "interface_assignments": interface_assignments,
             "interface_capabilities": interface_capabilities,
             "logs": logs,
+            "log_info": log_info,
             "success": True
         })
     except Exception as e:
         logger.error(f"Error in status endpoint: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/logs/<log_name>")
+def api_logs(log_name):
+    """API endpoint for getting more log content with pagination"""
+    try:
+        # Validate log name
+        valid_logs = ['main', 'wired', 'wifi-good', 'wifi-bad', 'traffic-eth0', 'traffic-wlan0', 'traffic-wlan1']
+        if log_name not in valid_logs:
+            return jsonify({"success": False, "error": "Invalid log name"}), 400
+        
+        # Get parameters
+        lines = int(request.args.get('lines', 200))  # Default to 200 lines
+        offset = int(request.args.get('offset', 0))
+        all_lines = request.args.get('all', 'false').lower() == 'true'
+        
+        # Read log content
+        if all_lines:
+            log_content = read_log_file(f'{log_name}.log', -1)  # Read all lines
+        else:
+            log_content = read_log_file(f'{log_name}.log', lines, offset)
+        
+        # Get log file info
+        log_info = get_log_file_info(f'{log_name}.log')
+        
+        return jsonify({
+            "success": True,
+            "log_name": log_name,
+            "content": log_content,
+            "info": log_info,
+            "lines_returned": len(log_content),
+            "offset": offset
+        })
+    except Exception as e:
+        logger.error(f"Error in logs API endpoint: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/api/throughput")
