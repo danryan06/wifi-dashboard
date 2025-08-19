@@ -25,8 +25,13 @@ LOG_MAX_BYTES="${LOG_MAX_BYTES:-${MAX_LOG_SIZE_BYTES:-524288}}"  # default 512KB
 
 log_msg() {
   local msg="[$(date '+%F %T')] WIRED: $1"
+
+  if command -v rotate_log >/dev/null 2>&1; then
+    rotate_log "$LOG_FILE" "${LOG_MAX_BYTES:-5}"
+  fi
+
+  mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
   echo "$msg" | tee -a "$LOG_FILE"
-  command -v rotate_log >/dev/null 2>&1 && rotate_log "$LOG_FILE" "$LOG_MAX_BYTES"
 }
 
 check_interface() {

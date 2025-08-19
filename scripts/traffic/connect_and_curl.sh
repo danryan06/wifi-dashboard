@@ -24,25 +24,26 @@ ROTATE_UTIL="/home/pi/wifi_test_dashboard/scripts/log_rotation_utils.sh"
 : "${LOG_MAX_SIZE_BYTES:=10485760}"   # 10MB default if not set
 : "${LOG_BACKUPS:=5}"                 # keep 5 rotated logs by default
 
+# robust local rotation (no bare failures under set -e)
 rotate_basic() {
-    local file="$LOG_FILE"
-    local max="${LOG_MAX_SIZE_BYTES:-10485760}"
-    local backups="${LOG_BACKUPS:-5}"
-    # Only rotate if file exists and exceeds max
-    if [[ -f "$file" ]]; then
-        local size
-        size="$(stat -c%s "$file" 2>/dev/null || wc -c < "$file" 2>/dev/null || echo 0)"
-        if [[ "$size" =~ ^[0-9]+$ ]] && (( size > max )); then
-            # Drop the oldest backup
-            [[ -f "$file.$backups" ]] && rm -f "$file.$backups" || true
-            # Shift others
-            for ((i=backups-1; i>=1; i--)); do
-                [[ -f "$file.$i" ]] && mv -f "$file.$i" "$file.$((i+1))" || true
-            done
-            mv -f "$file" "$file.1" || true
-            : > "$file" || true
-        fi
+  # If the central helper is available, use it
+  if command -v rotate_log >/dev/null 2>&1; then
+    rotate_log "$LOG_FILE" "${LOG_MAX_BYTES:-5}"
+    return 0
+  fi
+
+  # Otherwise do simple local size-based rotation
+  local max_mb="${LOG_MAX_BYTES:-5}"
+  local size_bytes=0
+
+  if [[ -f "$LOG_FILE" ]]; then
+    # GNU stat (Linux) or BSD stat (macOS)
+    size_bytes=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE")
+    if (( size_bytes >= max_mb * 1024 * 1024 )); then
+      mv -f "$LOG_FILE" "$LOG_FILE.$(date +%s).1"
+      : > "$LOG_FILE"
     fi
+  fi
 }
 
 log_msg() {
@@ -244,7 +245,7 @@ basic_connectivity_tests() {
     for url in "${TEST_URLS[@]}"; do
         if curl --interface "$INTERFACE" --max-time "${CURL_TIMEOUT:-10}" -fsSL -o /dev/null "$url"; then
             log_msg "✓ Traffic test passed: $url (via $INTERFACE)"
-            ((ok++))
+            ((++ok))
         fi
         sleep 1
     done
