@@ -172,6 +172,8 @@ show_log_rotation_status() {
         echo "  No backup files found"
     fi
 }
+# Back-compat shim so older calls keep working
+rotate_log() { rotate_log_if_needed "$1" "${2:-$MAX_LOG_SIZE_MB}"; }
 
 # Export functions so they can be used by scripts that source this file
 export -f rotate_log_if_needed

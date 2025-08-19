@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Keep service alive; log failing command instead of exiting
+set -E
+trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec line=$LINENO" | tee -a "$LOG_FILE"; ec=0' ERR
+
 # Wi-Fi Good Client Simulation
 # Connects to Wi-Fi network successfully and generates normal traffic
 

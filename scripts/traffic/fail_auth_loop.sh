@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+
 # Wi-Fi Bad Client Simulation
 # Repeatedly attempts to connect with *wrong* passwords to generate auth failures
 
@@ -10,6 +11,11 @@ LOG_FILE="/home/pi/wifi_test_dashboard/logs/wifi-bad.log"
 CONFIG_FILE="/home/pi/wifi_test_dashboard/configs/ssid.conf"
 SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
 ROTATE_HELPER="/home/pi/wifi_test_dashboard/scripts/log_rotation_utils.sh"
+
+
+# Keep service alive; log failing command instead of exiting
+set -E
+trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec line=$LINENO" | tee -a "$LOG_FILE"; ec=0' ERR
 
 # ---- Settings / helpers ------------------------------------------------------
 
@@ -387,4 +393,18 @@ fi
 
 check_wifi_interface || true
 force_disconnect || true
-main_loop
+
+# --- loop wrapper (uses your existing main_loop) ---
+MODE="${1:-loop}"                        # default: loop for systemd
+SLEEP="${WIFI_BAD_REFRESH_INTERVAL:-30}" # seconds between cycles
+
+if [[ "$MODE" == "loop" ]]; then
+  while true; do
+    main_loop
+    sleep "$SLEEP"
+  done
+else
+  main_loop
+fi
+# --- end wrapper ---
+

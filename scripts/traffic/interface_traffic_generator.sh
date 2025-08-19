@@ -26,6 +26,10 @@ fi
 
 LOG_FILE="$LOG_DIR/traffic-${IFACE}.log"
 
+# Keep service alive; log failing command instead of exiting
+set -E
+trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec line=$LINENO" | tee -a "$LOG_FILE"; ec=0' ERR
+
 log_msg() {
   local msg="[$(date '+%F %T')] TRAFFIC[$IFACE]: $1"
   echo "$msg" | tee -a "$LOG_FILE"
@@ -141,8 +145,16 @@ if [[ "$ACTION" == "once" ]]; then
   exit 0
 fi
 
-# loop mode
-while true; do
+# --- loop wrapper (uses existing one_cycle) ---
+MODE="${2:-loop}"                      # accepts: <iface> [loop|once], default loop for systemd
+SLEEP="${TRAFFIC_REFRESH_INTERVAL:-30}"
+
+if [[ "$MODE" == "loop" ]]; then
+  while true; do
+    one_cycle
+    sleep "$SLEEP"
+  done
+else
   one_cycle
-  sleep $((SLEEP_BASE * 5))
-done
+fi
+# --- end wrapper ---

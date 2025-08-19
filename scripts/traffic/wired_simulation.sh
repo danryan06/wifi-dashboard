@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+
+
 # Wired client traffic simulation (eth0)
 # Generates steady “good client” traffic on Ethernet
 
@@ -10,6 +12,10 @@ LOG_FILE="/home/pi/wifi_test_dashboard/logs/wired.log"
 SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
 ROTATE_HELPER="/home/pi/wifi_test_dashboard/scripts/log_rotation_utils.sh"
 TRAFFIC_GEN="/home/pi/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"
+
+# Keep service alive; log failing command instead of exiting
+set -E
+trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec line=$LINENO" | tee -a "$LOG_FILE"; ec=0' ERR
 
 [[ -f "$SETTINGS" ]] && source "$SETTINGS" || true
 [[ -f "$ROTATE_HELPER" ]] && source "$ROTATE_HELPER" || true
@@ -92,4 +98,16 @@ main_loop() {
 
 log_msg "Wired client bootstrap"
 log_msg "Log file: $LOG_FILE"
-main_loop
+
+MODE="${1:-loop}"                   # default loop for systemd
+SLEEP="${WIRED_REFRESH_INTERVAL:-60}"
+
+if [[ "$MODE" == "loop" ]]; then
+  while true; do
+    main_loop
+    sleep "$SLEEP"
+  done
+else
+  main_loop
+fi
+
