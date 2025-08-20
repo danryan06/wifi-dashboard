@@ -129,7 +129,7 @@ detect_network_interfaces() {
     
     # Show available interfaces
     log_info "Available network interfaces:"
-    ip link show | grep -E "(eth|wlan).*:" | while read -r line; do
+    ip link show | grep -E "^[0-9]+: (eth|wlan)[0-9].*:" | while read -r line; do
         iface=$(echo "$line" | cut -d: -f2 | tr -d ' ')
         state=$(echo "$line" | grep -o "state [A-Z]*" | awk '{print $2}' || echo "UNKNOWN")
         log_info "  $iface: $state"

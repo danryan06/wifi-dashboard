@@ -22,18 +22,27 @@ ROTATE_UTIL="/home/pi/wifi_test_dashboard/scripts/log_rotation_utils.sh"
 
 # Try to locate the generator in either layout
 TRAFFIC_GEN=""
-for p in \\
-  "/home/pi/wifi_test_dashboard/scripts/interface_traffic_generator.sh" \\
+for p in \
+  "/home/pi/wifi_test_dashboard/scripts/interface_traffic_generator.sh" \
   "/home/pi/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"
 do
   [[ -f "$p" ]] && TRAFFIC_GEN="$p" && break
 done
 
+# Verify we found it
+if [[ -z "$TRAFFIC_GEN" ]]; then
+    log_msg "⚠ Traffic generator script not found - traffic generation disabled"
+    TRAFFIC_GEN=""
+elif [[ ! -x "$TRAFFIC_GEN" ]]; then
+    log_msg "⚠ Traffic generator script not executable - fixing permissions"
+    chmod +x "$TRAFFIC_GEN" 2>/dev/null || TRAFFIC_GEN=""
+fi
+
 
 # Basic rotation function if utils not available
 rotate_basic() {
     if command -v rotate_log >/dev/null 2>&1; then
-        rotate_log "$LOG_FILE" "${LOG_MAX_BYTES:-5}"
+        rotate_log "$LOG_FILE" "${LOG_MAX_SIZE_MB:-5}"
         return 0
     fi
 

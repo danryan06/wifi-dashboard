@@ -256,8 +256,7 @@ def get_system_info():
 
 def get_service_status():
     """Get status of all services"""
-    services = ['wifi-dashboard', 'wired-test', 'wifi-good', 'wifi-bad', 
-               'traffic-eth0']  # Remove 'traffic-wlan0', 'traffic-wlan1'
+    services = ['wifi-dashboard', 'wired-test', 'wifi-good', 'wifi-bad']  # Remove traffic-eth0
     status = {}
     
     for service in services:
@@ -410,11 +409,10 @@ def build_log_labels(assignments: dict) -> dict:
     bad_iface  = assignments.get("bad_interface") or "wlan1"
     return {
         "main":        "Install/Upgrade",
-        "wired":       "Wired (eth0)",
+        "wired":       "Wired Client (eth0)",  # Updated description
         "wifi-good":   f"Wi-Fi Good ({good_iface})",
         "wifi-bad":    f"Wi-Fi Bad ({bad_iface})",
-        "traffic-eth0":"Traffic (eth0)",
-        # intentionally no wlan adapter logs here
+        # Removed traffic-eth0 entry
     }
 
 @app.route("/status")
@@ -433,7 +431,7 @@ def status():
             'wired':      read_log_file('wired.log', 50),
             'wifi-good':  read_log_file('wifi-good.log', 50),
             'wifi-bad':   read_log_file('wifi-bad.log', 50),
-            'traffic-eth0': read_log_file('traffic-eth0.log', 50),  # keep wired traffic if you use it
+            # 'traffic-eth0': read_log_file('traffic-eth0.log', 50),  # keep wired traffic if you use it
             # intentionally omit 'traffic-wlan0' and 'traffic-wlan1'
     }  
         
@@ -586,14 +584,21 @@ def traffic_control():
 def traffic_status():
     """API endpoint for traffic generation status"""
     try:
-        interfaces = ['eth0', 'wlan0', 'wlan1']
+        # No separate traffic interfaces - all integrated
+        interfaces = []  # Remove 'eth0' 
         traffic_status_data = {}
         
-        for interface in interfaces:
-            service_name = f"traffic-{interface}"
+        # Show integrated client services instead
+        client_services = [
+            ('wired-test', 'eth0', 'Wired Client with Integrated Traffic'),
+            ('wifi-good', 'wlan0', 'Wi-Fi Good Client with Integrated Traffic'),
+            ('wifi-bad', 'wlan1', 'Wi-Fi Bad Client (Auth Failures)')
+        ]
+        
+        for service, interface, description in client_services:
             try:
                 # Check service status
-                result = subprocess.run(['systemctl', 'is-active', f'{service_name}.service'], 
+                result = subprocess.run(['systemctl', 'is-active', f'{service}.service'], 
                                       capture_output=True, text=True, timeout=5)
                 status = result.stdout.strip()
                 
@@ -607,15 +612,12 @@ def traffic_status():
                             ip_info = line.strip().split()[1]
                             break
                 
-                # Get recent log entries
-                log_file = os.path.join(LOG_DIR, f"traffic-{interface}.log")
-                recent_logs = read_log_file(f"traffic-{interface}.log", 5) if os.path.exists(log_file) else []
-                
                 traffic_status_data[interface] = {
                     'service_status': status,
                     'ip_address': ip_info,
-                    'recent_logs': recent_logs,
-                    'log_file_exists': os.path.exists(log_file)
+                    'recent_logs': [],
+                    'log_file_exists': True,
+                    'description': description
                 }
                 
             except Exception as e:
@@ -623,7 +625,8 @@ def traffic_status():
                     'service_status': f'error: {e}',
                     'ip_address': 'unknown',
                     'recent_logs': [],
-                    'log_file_exists': False
+                    'log_file_exists': False,
+                    'description': description
                 }
         
         return jsonify({

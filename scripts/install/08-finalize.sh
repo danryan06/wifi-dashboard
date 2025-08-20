@@ -21,8 +21,9 @@ systemctl daemon-reload
 
 # Enable services
 CORE_SERVICES=("wifi-dashboard" "wired-test" "wifi-good" "wifi-bad")
-TRAFFIC_SERVICES=("traffic-eth0" "traffic-wlan0" "traffic-wlan1")
-
+# TRAFFIC_SERVICES=("traffic-eth0" "traffic-wlan0" "traffic-wlan1")
+    #Commented out to try and reduce the duplicates
+    
 log_info "Enabling core services..."
 for service in "${CORE_SERVICES[@]}"; do
     systemctl enable "${service}.service"

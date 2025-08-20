@@ -149,7 +149,8 @@ EOF
 }
 
 # Create traffic generation services for each interface
-create_traffic_service "eth0" "all" "heavy"
+# create_traffic_service "eth0" "all" "heavy"
+    #commented out because it was duplicate
 create_traffic_service "wlan0" "all" "medium" 
 create_traffic_service "wlan1" "ping" "light"
 
