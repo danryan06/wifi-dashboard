@@ -85,18 +85,17 @@ log_info "Verifying integrated service status..."
 sleep 5
 
 for service in "${INTEGRATED_SERVICES[@]}"; do
-    if systemctl is-active --quiet "$service.service"; then
-        log_info "✓ $service.service is running with integrated traffic"
-    else
-        local status=$(systemctl is-active "$service.service" 2>/dev/null || echo "failed")
-        log_warn "✗ $service.service status: $status"
-        
-        # Show recent logs for failed services
-        if [[ "$status" == "failed" ]]; then
-            log_warn "Recent logs for $service.service:"
-            journalctl -u "$service.service" --no-pager -n 5 2>/dev/null || true
-        fi
+  if systemctl is-active --quiet "${service}.service"; then
+    log_info "✓ ${service}.service is running with integrated traffic"
+  else
+    svc_status=$(systemctl is-active "${service}.service" 2>/dev/null || echo "failed")
+    log_warn "✗ ${service}.service status: ${svc_status}"
+
+    if [[ "${svc_status}" == "failed" ]]; then
+      log_warn "Recent logs for ${service}.service:"
+      journalctl -u "${service}.service" --no-pager -n 5 2>/dev/null || true
     fi
+  fi
 done
 
 # Final verification message
