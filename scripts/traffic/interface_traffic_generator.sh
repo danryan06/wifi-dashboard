@@ -25,6 +25,7 @@ if [[ -z "$IFACE" ]]; then
 fi
 
 LOG_FILE="$LOG_DIR/traffic-${IFACE}.log"
+LOG_FILE="${TRAFFIC_LOG_FILE:-$LOG_FILE}"
 
 # Keep service alive; log failing command instead of exiting
 set -E

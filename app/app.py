@@ -405,6 +405,18 @@ def index():
     ssid, _ = read_config()
     return render_template("dashboard.html", ssid=ssid)
 
+def build_log_labels(assignments: dict) -> dict:
+    good_iface = assignments.get("good_interface") or "wlan0"
+    bad_iface  = assignments.get("bad_interface") or "wlan1"
+    return {
+        "main":        "Install/Upgrade",
+        "wired":       "Wired (eth0)",
+        "wifi-good":   f"Wi-Fi Good ({good_iface})",
+        "wifi-bad":    f"Wi-Fi Bad ({bad_iface})",
+        "traffic-eth0":"Traffic (eth0)",
+        # intentionally no wlan adapter logs here
+    }
+
 @app.route("/status")
 def status():
     """API endpoint for status information with interface assignments"""
@@ -417,14 +429,13 @@ def status():
         
         # Get recent logs from all services - increased to 50 lines
         logs = {
-            'main': read_log_file('main.log', 50),
-            'wired': read_log_file('wired.log', 50),
-            'wifi-good': read_log_file('wifi-good.log', 50),
-            'wifi-bad': read_log_file('wifi-bad.log', 50),
-            'traffic-eth0': read_log_file('traffic-eth0.log', 50),
-            'traffic-wlan0': read_log_file('traffic-wlan0.log', 50),
-            'traffic-wlan1': read_log_file('traffic-wlan1.log', 50)
-        }
+            'main':       read_log_file('main.log', 50),
+            'wired':      read_log_file('wired.log', 50),
+            'wifi-good':  read_log_file('wifi-good.log', 50),
+            'wifi-bad':   read_log_file('wifi-bad.log', 50),
+            'traffic-eth0': read_log_file('traffic-eth0.log', 50),  # keep wired traffic if you use it
+            # intentionally omit 'traffic-wlan0' and 'traffic-wlan1'
+    }  
         
         # Get log file information
         log_info = {}
@@ -440,35 +451,65 @@ def status():
             "interface_capabilities": interface_capabilities,
             "logs": logs,
             "log_info": log_info,
+            "log_labels": build_log_labels(interface_assignments),
             "success": True
         })
+
     except Exception as e:
         logger.error(f"Error in status endpoint: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
 
 @app.route("/api/logs/<log_name>")
 def api_logs(log_name):
     """API endpoint for getting more log content with pagination"""
     try:
-        # Validate log name
-        valid_logs = ['main', 'wired', 'wifi-good', 'wifi-bad', 'traffic-eth0', 'traffic-wlan0', 'traffic-wlan1']
+        # Friendly aliases (map adapter names and short-hands to canonical logs)
+        # e.g. /api/logs/wlan0 -> wifi-good (if wlan0 is assigned as good)
+        assignments = get_interface_assignments()
+        alias_map = {
+            "good": "wifi-good",
+            "good-client": "wifi-good",
+            "bad": "wifi-bad",
+            "bad-client": "wifi-bad",
+        }
+        gi = assignments.get("good_interface")
+        bi = assignments.get("bad_interface")
+        if gi:
+            alias_map[gi] = "wifi-good"
+        if bi:
+            alias_map[bi] = "wifi-bad"
+
+        log_name = alias_map.get(log_name, log_name)
+
+        # Only expose the logs we actually want in the UI
+        valid_logs = [
+            "main",        # Install/Upgrade
+            "wired",       # Wired client
+            "wifi-good",   # Wi-Fi Good (integrated traffic)
+            "wifi-bad",    # Wi-Fi Bad (auth failures, minimal traffic)
+            "traffic-eth0" # Optional wired traffic generator
+            # NOTE: deliberately not listing 'traffic-wlan0'/'traffic-wlan1' here,
+            # but if you still want to support direct calls, you can add them back.
+        ]
         if log_name not in valid_logs:
             return jsonify({"success": False, "error": "Invalid log name"}), 400
-        
-        # Get parameters
-        lines = int(request.args.get('lines', 200))  # Default to 200 lines
-        offset = int(request.args.get('offset', 0))
-        all_lines = request.args.get('all', 'false').lower() == 'true'
-        
-        # Read log content
+
+        # Params
+        lines = int(request.args.get("lines", 200))  # default: 200
+        offset = int(request.args.get("offset", 0))
+        all_lines = request.args.get("all", "false").lower() == "true"
+
+        # Read the log
         if all_lines:
-            log_content = read_log_file(f'{log_name}.log', -1)  # Read all lines
+            log_content = read_log_file(f"{log_name}.log", -1)     # all lines
         else:
-            log_content = read_log_file(f'{log_name}.log', lines, offset)
-        
-        # Get log file info
-        log_info = get_log_file_info(f'{log_name}.log')
-        
+            log_content = read_log_file(f"{log_name}.log", lines, offset)
+
+        # Info for footer (size, mtime, etc.)
+        log_info = get_log_file_info(f"{log_name}.log")
+
         return jsonify({
             "success": True,
             "log_name": log_name,

@@ -20,6 +20,9 @@ ROTATE_UTIL="/home/pi/wifi_test_dashboard/scripts/log_rotation_utils.sh"
 [[ -f "$ROTATE_UTIL" ]] && source "$ROTATE_UTIL" || true
 : "${LOG_MAX_SIZE_BYTES:=10485760}"   # 10MB default
 
+TRAFFIC_GEN="/home/pi/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"
+
+
 # Basic rotation function if utils not available
 rotate_basic() {
     if command -v rotate_log >/dev/null 2>&1; then
@@ -531,9 +534,24 @@ main_loop() {
         else
             log_msg "⚠ Connected to wrong SSID: '$current_ssid', expected: '$SSID'"
         fi
-
+        run_heavy_traffic_once
+        
         sleep "${REFRESH_INTERVAL}"
     done
+}
+
+run_heavy_traffic_once() {
+  # Intensity from installer’s settings (install.sh writes WIFI_GOOD_TRAFFIC_INTENSITY)
+  local intensity="${WIFI_GOOD_TRAFFIC_INTENSITY:-medium}"
+
+  if [[ -x "$TRAFFIC_GEN" ]]; then
+    # Write the generator’s messages into wifi-good.log (not traffic-wlan0.log)
+    TRAFFIC_LOG_FILE="$LOG_FILE" \
+    TRAFFIC_INTENSITY_OVERRIDE="$intensity" \
+    "$TRAFFIC_GEN" "$INTERFACE" once || true
+  else
+    log_msg "traffic helper not found at $TRAFFIC_GEN"
+  fi
 }
 
 # --- Initialization ---

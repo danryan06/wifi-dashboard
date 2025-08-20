@@ -228,6 +228,7 @@ EOF
 # Update scripts with interface assignments
 if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh" ]]; then
     sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$good_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
+
 fi
 
 if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh" && -n "$bad_client_iface" ]]; then
@@ -354,6 +355,13 @@ verify_installation() {
         return 1
     fi
 }
+
+# after enabling wifi-good/wifi-bad/etc, make sure wlan0 traffic unit is gone
+if systemctl list-unit-files | grep -q '^traffic-wlan0\.service'; then
+  systemctl disable --now traffic-wlan0.service || true
+  rm -f /etc/systemd/system/traffic-wlan0.service
+  systemctl daemon-reload
+fi
 
 cleanup_installation() {
     log_step "Cleaning up installation files..."
