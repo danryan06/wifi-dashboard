@@ -19,19 +19,12 @@ find "$PI_HOME/wifi_test_dashboard" -type f -name "*.conf" -exec chmod 600 {} \;
 log_info "Reloading systemd daemon..."
 systemctl daemon-reload
 
-# Enable services
+# Enable services - ONLY the actual client services
 CORE_SERVICES=("wifi-dashboard" "wired-test" "wifi-good" "wifi-bad")
-# TRAFFIC_SERVICES=("traffic-eth0" "traffic-wlan0" "traffic-wlan1")
-    #Commented out to try and reduce the duplicates
-    
+# Removed TRAFFIC_SERVICES - they're integrated now
+
 log_info "Enabling core services..."
 for service in "${CORE_SERVICES[@]}"; do
-    systemctl enable "${service}.service"
-    log_info "✓ Enabled $service.service"
-done
-
-log_info "Enabling traffic services..."
-for service in "${TRAFFIC_SERVICES[@]}"; do
     systemctl enable "${service}.service"
     log_info "✓ Enabled $service.service"
 done
@@ -48,19 +41,13 @@ sleep 2
 systemctl restart wifi-bad.service
 sleep 2
 
-log_info "Starting traffic generation services..."
-systemctl restart traffic-eth0.service
-sleep 2
-systemctl restart traffic-wlan0.service  
-sleep 2
-systemctl restart traffic-wlan1.service
+# Removed traffic service start section - no longer needed
 
 # Verify services are running
 log_info "Verifying service status..."
 sleep 5
 
-ALL_SERVICES=("${CORE_SERVICES[@]}" "${TRAFFIC_SERVICES[@]}")
-for service in "${ALL_SERVICES[@]}"; do
+for service in "${CORE_SERVICES[@]}"; do
     if systemctl is-active --quiet "$service.service"; then
         log_info "✓ $service.service is running"
     else
