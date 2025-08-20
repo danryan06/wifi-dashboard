@@ -20,7 +20,14 @@ ROTATE_UTIL="/home/pi/wifi_test_dashboard/scripts/log_rotation_utils.sh"
 [[ -f "$ROTATE_UTIL" ]] && source "$ROTATE_UTIL" || true
 : "${LOG_MAX_SIZE_BYTES:=10485760}"   # 10MB default
 
-TRAFFIC_GEN="/home/pi/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"
+# Try to locate the generator in either layout
+TRAFFIC_GEN=""
+for p in \\
+  "/home/pi/wifi_test_dashboard/scripts/interface_traffic_generator.sh" \\
+  "/home/pi/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"
+do
+  [[ -f "$p" ]] && TRAFFIC_GEN="$p" && break
+done
 
 
 # Basic rotation function if utils not available

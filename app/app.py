@@ -257,7 +257,7 @@ def get_system_info():
 def get_service_status():
     """Get status of all services"""
     services = ['wifi-dashboard', 'wired-test', 'wifi-good', 'wifi-bad', 
-               'traffic-eth0', 'traffic-wlan0', 'traffic-wlan1']
+               'traffic-eth0']  # Remove 'traffic-wlan0', 'traffic-wlan1'
     status = {}
     
     for service in services:
