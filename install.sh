@@ -28,8 +28,8 @@ print_banner() {
     echo "███████████████████████████████████████████████████████████████████████████████"
     echo "█                                                                             █"
     echo "█  🌐 Wi-Fi Test Dashboard with Auto Interface Detection ${VERSION}           █"
-    echo "█  🚦 Intelligent interface assignment for optimal performance               █"
-    echo "█  📡 Speedtest CLI + YouTube Traffic + Smart Configuration                  █"
+    echo "█  🚦 Intelligent interface assignment for optimal performance                █"
+    echo "█  📡 Speedtest CLI + YouTube Traffic + Smart Configuration                   █"
     echo "█                                                                             █"
     echo "███████████████████████████████████████████████████████████████████████████████"
     echo -e "${NC}"
@@ -225,15 +225,31 @@ WIRED_HOSTNAME=CNXNMist-Wired
 WIRED_TRAFFIC_INTENSITY=heavy
 EOF
 
-# Update scripts with interface assignments
-if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh" ]]; then
-    sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$good_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
+# Update (or insert) INTERFACE="…" in a script, safely under set -e
+patch_iface_var() {
+  local file="$1" iface="$2"
+  [[ -f "$file" ]] || return 0
 
+  # If an uncommented INTERFACE= line exists, replace the whole assignment,
+  # preserving a leading 'export ' if present.
+  if grep -Eq '^[[:space:]]*(export[[:space:]]+)?INTERFACE=' "$file"; then
+    sed -i -E 's|^[[:space:]]*(export[[:space:]]+)?INTERFACE=.*$|\1INTERFACE="'"$iface"'"|' "$file"
+  else
+    # Otherwise append a clean assignment at the end.
+    printf '\nINTERFACE="%s"\n' "$iface" >> "$file"
+  fi
+}
+
+# Good client
+patch_iface_var "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh" "$good_client_iface"
+patch_iface_var "$PI_HOME/wifi_test_dashboard/scripts/traffic/connect_and_curl.sh" "$good_client_iface"
+
+# Bad client (only if assigned)
+if [[ -n "${bad_client_iface:-}" ]]; then
+  patch_iface_var "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh" "$bad_client_iface"
+  patch_iface_var "$PI_HOME/wifi_test_dashboard/scripts/traffic/fail_auth_loop.sh" "$bad_client_iface"
 fi
 
-if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh" && -n "$bad_client_iface" ]]; then
-    sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$bad_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh"
-fi
 
 # Create summary document
 cat > "$PI_HOME/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md" << EOF
@@ -394,7 +410,7 @@ print_success_message() {
     echo
     echo -e "${GREEN}███████████████████████████████████████████████████████████████████████████████${NC}"
     echo -e "${GREEN}█                                                                             █${NC}"
-    echo -e "${GREEN}█  🎉 INSTALLATION COMPLETE! 🎉                                              █${NC}"
+    echo -e "${GREEN}█  🎉 INSTALLATION COMPLETE! 🎉                                               █${NC}"
     echo -e "${GREEN}█                                                                             █${NC}"
     echo -e "${GREEN}█  Wi-Fi Test Dashboard ${VERSION} installed successfully!                    █${NC}"
     echo -e "${GREEN}█                                                                             █${NC}"

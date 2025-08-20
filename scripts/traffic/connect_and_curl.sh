@@ -535,23 +535,26 @@ main_loop() {
             log_msg "⚠ Connected to wrong SSID: '$current_ssid', expected: '$SSID'"
         fi
         run_heavy_traffic_once
-        
+
         sleep "${REFRESH_INTERVAL}"
     done
 }
 
-run_heavy_traffic_once() {
-  # Intensity from installer’s settings (install.sh writes WIFI_GOOD_TRAFFIC_INTENSITY)
-  local intensity="${WIFI_GOOD_TRAFFIC_INTENSITY:-medium}"
+# Try to locate the generator in either layout
+TRAFFIC_GEN=""
+for p in \
+  "/home/pi/wifi_test_dashboard/scripts/interface_traffic_generator.sh" \
+  "/home/pi/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"
+do
+  [[ -f "$p" ]] && TRAFFIC_GEN="$p" && break
+done
 
-  if [[ -x "$TRAFFIC_GEN" ]]; then
-    # Write the generator’s messages into wifi-good.log (not traffic-wlan0.log)
-    TRAFFIC_LOG_FILE="$LOG_FILE" \
-    TRAFFIC_INTENSITY_OVERRIDE="$intensity" \
-    "$TRAFFIC_GEN" "$INTERFACE" once || true
-  else
-    log_msg "traffic helper not found at $TRAFFIC_GEN"
-  fi
+run_heavy_traffic_once() {
+  [[ -n "$TRAFFIC_GEN" ]] || return 0
+  # Unify logs under Wi-Fi Good log
+  TRAFFIC_LOG_FILE="$LOG_FILE" \
+  TRAFFIC_INTENSITY_OVERRIDE="${WIFI_GOOD_TRAFFIC_INTENSITY:-medium}" \
+    bash "$TRAFFIC_GEN" "$INTERFACE" once || true
 }
 
 # --- Initialization ---

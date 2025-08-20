@@ -465,8 +465,7 @@ def status():
 def api_logs(log_name):
     """API endpoint for getting more log content with pagination"""
     try:
-        # Friendly aliases (map adapter names and short-hands to canonical logs)
-        # e.g. /api/logs/wlan0 -> wifi-good (if wlan0 is assigned as good)
+        # Map friendly names & adapter names to canonical logs
         assignments = get_interface_assignments()
         alias_map = {
             "good": "wifi-good",
@@ -476,39 +475,21 @@ def api_logs(log_name):
         }
         gi = assignments.get("good_interface")
         bi = assignments.get("bad_interface")
-        if gi:
-            alias_map[gi] = "wifi-good"
-        if bi:
-            alias_map[bi] = "wifi-bad"
-
+        if gi: alias_map[gi] = "wifi-good"
+        if bi: alias_map[bi] = "wifi-bad"
         log_name = alias_map.get(log_name, log_name)
 
-        # Only expose the logs we actually want in the UI
-        valid_logs = [
-            "main",        # Install/Upgrade
-            "wired",       # Wired client
-            "wifi-good",   # Wi-Fi Good (integrated traffic)
-            "wifi-bad",    # Wi-Fi Bad (auth failures, minimal traffic)
-            "traffic-eth0" # Optional wired traffic generator
-            # NOTE: deliberately not listing 'traffic-wlan0'/'traffic-wlan1' here,
-            # but if you still want to support direct calls, you can add them back.
-        ]
+        # Only expose what the UI should show
+        valid_logs = ["main", "wired", "wifi-good", "wifi-bad", "traffic-eth0"]
         if log_name not in valid_logs:
             return jsonify({"success": False, "error": "Invalid log name"}), 400
 
-        # Params
-        lines = int(request.args.get("lines", 200))  # default: 200
-        offset = int(request.args.get("offset", 0))
+        lines    = int(request.args.get("lines", 200))
+        offset   = int(request.args.get("offset", 0))
         all_lines = request.args.get("all", "false").lower() == "true"
 
-        # Read the log
-        if all_lines:
-            log_content = read_log_file(f"{log_name}.log", -1)     # all lines
-        else:
-            log_content = read_log_file(f"{log_name}.log", lines, offset)
-
-        # Info for footer (size, mtime, etc.)
-        log_info = get_log_file_info(f"{log_name}.log")
+        log_content = read_log_file(f"{log_name}.log", -1 if all_lines else lines, offset)
+        log_info    = get_log_file_info(f"{log_name}.log")
 
         return jsonify({
             "success": True,
@@ -521,6 +502,7 @@ def api_logs(log_name):
     except Exception as e:
         logger.error(f"Error in logs API endpoint: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route("/api/throughput")
 def api_throughput():
