@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-
-
 # Wired client traffic simulation (eth0)
-# Generates steady “good client” traffic on Ethernet
+# Generates steady "good client" traffic on Ethernet
 
 INTERFACE="eth0"
 HOSTNAME="CNXNMist-Wired"
 LOG_FILE="/home/pi/wifi_test_dashboard/logs/wired.log"
 SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
 ROTATE_HELPER="/home/pi/wifi_test_dashboard/scripts/log_rotation_utils.sh"
-TRAFFIC_GEN="/home/pi/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"
 
 # Keep service alive; log failing command instead of exiting
 set -E
@@ -22,6 +19,15 @@ trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec lin
 
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 LOG_MAX_BYTES="${LOG_MAX_BYTES:-${MAX_LOG_SIZE_BYTES:-524288}}"  # default 512KB
+
+# Try to locate the traffic generator
+TRAFFIC_GEN=""
+for p in \
+  "/home/pi/wifi_test_dashboard/scripts/interface_traffic_generator.sh" \
+  "/home/pi/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"
+do
+  [[ -f "$p" ]] && TRAFFIC_GEN="$p" && break
+done
 
 log_msg() {
   local msg="[$(date '+%F %T')] WIRED: $1"
@@ -52,9 +58,36 @@ check_ip() {
 }
 
 basic_tests() {
-  log_msg "Connectivity checks on $INTERFACE"
-  ping -I "$INTERFACE" -c 3 -W 2 1.1.1.1 >/dev/null 2>&1 && log_msg "✓ ping 1.1.1.1" || log_msg "✗ ping 1.1.1.1"
-  curl --interface "$INTERFACE" -m 10 -s https://www.google.com >/dev/null && log_msg "✓ curl google.com" || log_msg "✗ curl google.com"
+  log_msg "Basic connectivity checks on $INTERFACE"
+  
+  # Safe ping test
+  if ping -I "$INTERFACE" -c 3 -W 2 1.1.1.1 >/dev/null 2>&1; then
+    log_msg "✓ ping 1.1.1.1"
+  else
+    log_msg "✗ ping 1.1.1.1"
+  fi
+  
+  # Safe curl test
+  if curl --interface "$INTERFACE" -m 10 -s https://www.google.com >/dev/null 2>&1; then
+    log_msg "✓ curl google.com"
+  else
+    log_msg "✗ curl google.com"
+  fi
+}
+
+generate_heavy_traffic() {
+  if [[ -n "$TRAFFIC_GEN" && -x "$TRAFFIC_GEN" ]]; then
+    log_msg "🚀 Starting heavy traffic generation using $TRAFFIC_GEN"
+    
+    # Run traffic generator once with heavy intensity
+    TRAFFIC_LOG_FILE="$LOG_FILE" \
+    TRAFFIC_INTENSITY_OVERRIDE="heavy" \
+      bash "$TRAFFIC_GEN" "$INTERFACE" once || true
+      
+    log_msg "✓ Heavy traffic generation cycle completed"
+  else
+    log_msg "⚠ Traffic generator not found - only basic tests available"
+  fi
 }
 
 start_iperf_server_if_needed() {
@@ -67,6 +100,8 @@ start_iperf_server_if_needed() {
 
 main_loop() {
   log_msg "Wired simulation starting (iface=$INTERFACE host=$HOSTNAME)"
+  log_msg "Heavy traffic generation enabled for realistic testing"
+  
   start_iperf_server_if_needed
 
   while true; do
@@ -79,7 +114,7 @@ main_loop() {
     local ipaddr
     ipaddr="$(check_ip || true)"
     if [[ -z "$ipaddr" ]]; then
-      log_msg "No IPv4 address on $INTERFACE; retrying DHCP?"
+      log_msg "No IPv4 address on $INTERFACE; requesting DHCP..."
       # gentle kick
       sudo dhclient -1 "$INTERFACE" >/dev/null 2>&1 || true
       sleep 5
@@ -88,31 +123,25 @@ main_loop() {
 
     if [[ -n "$ipaddr" ]]; then
       log_msg "✓ $INTERFACE has IP: $ipaddr"
+      
+      # Do basic connectivity tests
       basic_tests
-      # Run one cycle of the shared traffic generator
-      if [[ -x "$TRAFFIC_GEN" ]]; then
-        "$TRAFFIC_GEN" "$INTERFACE" once || true
-      fi
+      
+      # Generate heavy traffic (speedtest, downloads, etc.)
+      generate_heavy_traffic
+      
+      log_msg "✓ Wired client cycle completed - heavy traffic generated"
     else
       log_msg "✗ Still no IP on $INTERFACE"
     fi
 
-    sleep "${REFRESH_INTERVAL:-60}"
+    sleep "${WIRED_REFRESH_INTERVAL:-60}"
   done
 }
 
-log_msg "Wired client bootstrap"
+# Initialize
+log_msg "Wired client bootstrap with heavy traffic generation"
 log_msg "Log file: $LOG_FILE"
+log_msg "Traffic generator: ${TRAFFIC_GEN:-not found}"
 
-MODE="${1:-loop}"                   # default loop for systemd
-SLEEP="${WIRED_REFRESH_INTERVAL:-60}"
-
-if [[ "$MODE" == "loop" ]]; then
-  while true; do
-    main_loop
-    sleep "$SLEEP"
-  done
-else
-  main_loop
-fi
-
+main_loop

@@ -31,13 +31,12 @@ done
 
 # Verify we found it
 if [[ -z "$TRAFFIC_GEN" ]]; then
-    log_msg "⚠ Traffic generator script not found - traffic generation disabled"
+    echo "[$(date '+%F %T')] WIFI-GOOD: ⚠ Traffic generator script not found - traffic generation disabled" | tee -a "$LOG_FILE"
     TRAFFIC_GEN=""
 elif [[ ! -x "$TRAFFIC_GEN" ]]; then
-    log_msg "⚠ Traffic generator script not executable - fixing permissions"
+    echo "[$(date '+%F %T')] WIFI-GOOD: ⚠ Traffic generator script not executable - fixing permissions" | tee -a "$LOG_FILE"
     chmod +x "$TRAFFIC_GEN" 2>/dev/null || TRAFFIC_GEN=""
 fi
-
 
 # Basic rotation function if utils not available
 rotate_basic() {
@@ -46,13 +45,13 @@ rotate_basic() {
         return 0
     fi
 
-    local max_mb="${LOG_MAX_BYTES:-5}"
+    local max_bytes="${LOG_MAX_SIZE_BYTES:-10485760}"
     local size_bytes=0
 
     if [[ -f "$LOG_FILE" ]]; then
-        size_bytes=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE")
-        if (( size_bytes >= max_mb * 1024 * 1024 )); then
-            mv -f "$LOG_FILE" "$LOG_FILE.$(date +%s).1"
+        size_bytes=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo "0")
+        if (( size_bytes >= max_bytes )); then
+            mv -f "$LOG_FILE" "$LOG_FILE.$(date +%s).1" 2>/dev/null || true
             : > "$LOG_FILE"
         fi
     fi
@@ -178,8 +177,7 @@ check_wifi_interface() {
     fi
 
     local state
-    state="$(nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}')"
-    state="${state:-unknown}"
+    state="$(nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}' || echo "unknown")"
     log_msg "Interface $INTERFACE state: $state"
 
     return 0
@@ -199,7 +197,7 @@ connect_to_wifi() {
       while read -r conn; do
         if [[ -n "$conn" ]]; then
             local c_ssid
-            c_ssid="$(nmcli -t -f 802-11-wireless.ssid connection show "$conn" 2>/dev/null | cut -d: -f2)"
+            c_ssid="$(nmcli -t -f 802-11-wireless.ssid connection show "$conn" 2>/dev/null | cut -d: -f2 || echo "")"
             [[ "$c_ssid" == "$ssid" ]] && nmcli connection delete "$conn" 2>/dev/null || true
         fi
       done
@@ -237,7 +235,7 @@ connect_to_wifi() {
                 return 0
             fi
             sleep 2
-            ((wait_count++))
+            wait_count=$((wait_count + 1))
         done
         
         log_msg "⚠ Connected but no IP address assigned"
@@ -251,15 +249,15 @@ connect_to_wifi() {
 
 # --- Traffic generation functions ---
 
-# Basic connectivity tests
+# Basic connectivity tests - FIXED arithmetic
 test_basic_connectivity() {
     log_msg "Testing basic connectivity on $INTERFACE..."
     local success_count=0
     
     for url in "${TEST_URLS[@]}"; do
-        if curl --interface "$INTERFACE" --max-time "${CURL_TIMEOUT:-10}" -fsSL -o /dev/null "$url"; then
+        if curl --interface "$INTERFACE" --max-time "${CURL_TIMEOUT:-10}" -fsSL -o /dev/null "$url" 2>/dev/null; then
             log_msg "✓ Connectivity test passed: $url"
-            ((success_count++))
+            success_count=$((success_count + 1))  # SAFE arithmetic
         else
             log_msg "✗ Connectivity test failed: $url"
         fi
@@ -302,21 +300,21 @@ generate_download_traffic() {
                    --silent \
                    --location \
                    --output /dev/null \
-                   "$url"; then
+                   "$url" 2>/dev/null; then
                 local end_time=$(date +%s)
                 local duration=$((end_time - start_time))
-                log_msg "✓ Download completed: $(basename "$url") (${duration}s)"
+                echo "[$(date '+%F %T')] WIFI-GOOD: ✓ Download completed: $(basename "$url") (${duration}s)" >> "$LOG_FILE"
             else
-                log_msg "✗ Download failed: $(basename "$url")"
+                echo "[$(date '+%F %T')] WIFI-GOOD: ✗ Download failed: $(basename "$url")" >> "$LOG_FILE"
             fi
         } &
         pids+=($!)
     done
     
-    # Wait for downloads to complete
+    # Wait for downloads to complete - SAFE arithmetic
     for pid in "${pids[@]}"; do
-        if wait "$pid"; then
-            ((completed++))
+        if wait "$pid" 2>/dev/null; then
+            completed=$((completed + 1))  # SAFE arithmetic
         fi
     done
     
@@ -378,12 +376,12 @@ try:
     print('https://www.youtube.com/watch?v=' + d.get('id', ''))
 except:
     pass
-")"
+" 2>/dev/null || echo "")"
     
     if [[ -n "$video_url" ]]; then
         # Get media URL and stream some data
         local media_url
-        media_url="$(yt-dlp -f 'worst[height<=360]' -g "$video_url" 2>/dev/null | head -n1)"
+        media_url="$(yt-dlp -f 'worst[height<=360]' -g "$video_url" 2>/dev/null | head -n1 || echo "")"
         
         if [[ -n "$media_url" ]]; then
             local duration="${YOUTUBE_MAX_DURATION:-300}"
@@ -429,6 +427,19 @@ generate_dns_activity() {
     done
 }
 
+# Call shared traffic generator for heavy traffic
+run_heavy_traffic_once() {
+    [[ -n "$TRAFFIC_GEN" ]] || return 0
+    log_msg "🚀 Running heavy traffic generator cycle..."
+    
+    # Unify logs under Wi-Fi Good log
+    TRAFFIC_LOG_FILE="$LOG_FILE" \
+    TRAFFIC_INTENSITY_OVERRIDE="${TRAFFIC_INTENSITY}" \
+      bash "$TRAFFIC_GEN" "$INTERFACE" once || true
+      
+    log_msg "✓ Heavy traffic generator cycle completed"
+}
+
 # Main traffic generation orchestrator
 generate_realistic_traffic() {
     if [[ "$ENABLE_INTEGRATED_TRAFFIC" != "true" ]]; then
@@ -470,20 +481,23 @@ generate_realistic_traffic() {
     # YouTube traffic (if enabled)
     generate_youtube_traffic
     
+    # Run heavy traffic generator cycle
+    run_heavy_traffic_once
+    
     log_msg "✓ Realistic traffic generation cycle completed"
 }
 
 # --- Connection info display ---
 display_connection_info() {
     local ip_addr
-    ip_addr="$(ip -o -4 addr show "$INTERFACE" 2>/dev/null | awk '{print $4}' | head -n1)"
+    ip_addr="$(ip -o -4 addr show "$INTERFACE" 2>/dev/null | awk '{print $4}' | head -n1 || echo "")"
     local mac
     mac="$(cat /sys/class/net/"$INTERFACE"/address 2>/dev/null || echo "unknown")"
     log_msg "Connection Info - Interface: $INTERFACE, IP: ${ip_addr:-unknown}, MAC: $mac"
 
     if command -v iwconfig >/dev/null 2>&1; then
         local wi
-        wi="$(iwconfig "$INTERFACE" 2>/dev/null | tr -s ' ' | sed 's/[[:space:]]\{1,\}/ /g')"
+        wi="$(iwconfig "$INTERFACE" 2>/dev/null | tr -s ' ' | sed 's/[[:space:]]\{1,\}/ /g' || echo "")"
         if [[ -n "$wi" ]]; then
             log_msg "Wi-Fi Info: ${wi}"
         fi
@@ -495,6 +509,7 @@ main_loop() {
     log_msg "Starting enhanced Wi-Fi good client simulation"
     log_msg "Interface: $INTERFACE, Hostname: $HOSTNAME, Traffic: $TRAFFIC_INTENSITY"
     log_msg "Integrated traffic generation: $ENABLE_INTEGRATED_TRAFFIC"
+    log_msg "Traffic generator: ${TRAFFIC_GEN:-not found}"
 
     local last_config_check=0
     local last_traffic_time=0
@@ -519,7 +534,7 @@ main_loop() {
 
         # Check connection status
         local state
-        state="$(nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}')"
+        state="$(nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}' || echo "unknown")"
         
         if [[ "$state" != "100" ]]; then
             log_msg "Not connected to target SSID, attempting connection on $INTERFACE..."
@@ -535,13 +550,13 @@ main_loop() {
 
         # Verify we're connected to the right SSID
         local current_ssid
-        current_ssid="$(nmcli -t -f active,ssid dev wifi | grep '^yes' | cut -d':' -f2 || echo "")"
+        current_ssid="$(nmcli -t -f active,ssid dev wifi 2>/dev/null | grep '^yes' | cut -d':' -f2 || echo "")"
         
         if [[ "$current_ssid" == "$SSID" ]]; then
             log_msg "✓ Connected to target SSID: $SSID on $INTERFACE"
             
-            # Generate realistic traffic
-            if [[ $((now - last_traffic_time)) -gt 30 ]]; then  # Traffic every 30 seconds minimum
+            # Generate realistic traffic (every 30 seconds minimum)
+            if [[ $((now - last_traffic_time)) -gt 30 ]]; then
                 generate_realistic_traffic
                 last_traffic_time=$now
             fi
@@ -550,27 +565,9 @@ main_loop() {
         else
             log_msg "⚠ Connected to wrong SSID: '$current_ssid', expected: '$SSID'"
         fi
-        run_heavy_traffic_once
 
         sleep "${REFRESH_INTERVAL}"
     done
-}
-
-# Try to locate the generator in either layout
-TRAFFIC_GEN=""
-for p in \
-  "/home/pi/wifi_test_dashboard/scripts/interface_traffic_generator.sh" \
-  "/home/pi/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"
-do
-  [[ -f "$p" ]] && TRAFFIC_GEN="$p" && break
-done
-
-run_heavy_traffic_once() {
-  [[ -n "$TRAFFIC_GEN" ]] || return 0
-  # Unify logs under Wi-Fi Good log
-  TRAFFIC_LOG_FILE="$LOG_FILE" \
-  TRAFFIC_INTENSITY_OVERRIDE="${WIFI_GOOD_TRAFFIC_INTENSITY:-medium}" \
-    bash "$TRAFFIC_GEN" "$INTERFACE" once || true
 }
 
 # --- Initialization ---

@@ -255,8 +255,9 @@ def get_system_info():
         }
 
 def get_service_status():
-    """Get status of all services"""
-    services = ['wifi-dashboard', 'wired-test', 'wifi-good', 'wifi-bad']  # Remove traffic-eth0
+    """Get status of all INTEGRATED services"""
+    # INTEGRATED SERVICES ONLY - no separate traffic services
+    services = ['wifi-dashboard', 'wired-test', 'wifi-good', 'wifi-bad']
     status = {}
     
     for service in services:
@@ -409,10 +410,10 @@ def build_log_labels(assignments: dict) -> dict:
     bad_iface  = assignments.get("bad_interface") or "wlan1"
     return {
         "main":        "Install/Upgrade",
-        "wired":       "Wired Client (eth0)",  # Updated description
-        "wifi-good":   f"Wi-Fi Good ({good_iface})",
-        "wifi-bad":    f"Wi-Fi Bad ({bad_iface})",
-        # Removed traffic-eth0 entry
+        "wired":       "Wired Client + Heavy Traffic (eth0)",
+        "wifi-good":   f"Wi-Fi Good Client + Traffic ({good_iface})",
+        "wifi-bad":    f"Wi-Fi Bad Client - Auth Failures ({bad_iface})",
+        # REMOVED: traffic-eth0, traffic-wlan0, traffic-wlan1 entries
     }
 
 @app.route("/status")
@@ -425,17 +426,16 @@ def status():
         interface_assignments = get_interface_assignments()
         interface_capabilities = get_interface_capabilities()
         
-        # Get recent logs from all services - increased to 50 lines
+        # Get recent logs from INTEGRATED services only - NO separate traffic services
         logs = {
             'main':       read_log_file('main.log', 50),
             'wired':      read_log_file('wired.log', 50),
             'wifi-good':  read_log_file('wifi-good.log', 50),
             'wifi-bad':   read_log_file('wifi-bad.log', 50),
-            # 'traffic-eth0': read_log_file('traffic-eth0.log', 50),  # keep wired traffic if you use it
-            # intentionally omit 'traffic-wlan0' and 'traffic-wlan1'
-    }  
+            # REMOVED: traffic-eth0, traffic-wlan0, traffic-wlan1 - now integrated
+        }  
         
-        # Get log file information
+        # Get log file information for integrated services only
         log_info = {}
         for log_name in logs.keys():
             log_info[log_name] = get_log_file_info(f'{log_name}.log')
@@ -461,15 +461,17 @@ def status():
 
 @app.route("/api/logs/<log_name>")
 def api_logs(log_name):
-    """API endpoint for getting more log content with pagination"""
+    """API endpoint for getting log content with integrated service mapping"""
     try:
-        # Map friendly names & adapter names to canonical logs
+        # Map friendly names & adapter names to integrated service logs
         assignments = get_interface_assignments()
         alias_map = {
             "good": "wifi-good",
             "good-client": "wifi-good",
-            "bad": "wifi-bad",
+            "bad": "wifi-bad", 
             "bad-client": "wifi-bad",
+            "wired": "wired",
+            "ethernet": "wired"
         }
         gi = assignments.get("good_interface")
         bi = assignments.get("bad_interface")
@@ -477,8 +479,8 @@ def api_logs(log_name):
         if bi: alias_map[bi] = "wifi-bad"
         log_name = alias_map.get(log_name, log_name)
 
-        # Only expose what the UI should show
-        valid_logs = ["main", "wired", "wifi-good", "wifi-bad", "traffic-eth0"]
+        # Only expose integrated service logs
+        valid_logs = ["main", "wired", "wifi-good", "wifi-bad"]
         if log_name not in valid_logs:
             return jsonify({"success": False, "error": "Invalid log name"}), 400
 
@@ -582,18 +584,16 @@ def traffic_control():
 
 @app.route("/traffic_status")
 def traffic_status():
-    """API endpoint for traffic generation status"""
+    """API endpoint for integrated client services status"""
     try:
-        # No separate traffic interfaces - all integrated
-        interfaces = []  # Remove 'eth0' 
-        traffic_status_data = {}
-        
-        # Show integrated client services instead
+        # Show integrated client services instead of separate traffic services
         client_services = [
-            ('wired-test', 'eth0', 'Wired Client with Integrated Traffic'),
-            ('wifi-good', 'wlan0', 'Wi-Fi Good Client with Integrated Traffic'),
-            ('wifi-bad', 'wlan1', 'Wi-Fi Bad Client (Auth Failures)')
+            ('wired-test', 'eth0', 'Wired Client with Integrated Heavy Traffic'),
+            ('wifi-good', 'wlan0', 'Wi-Fi Good Client with Integrated Medium Traffic'),
+            ('wifi-bad', 'wlan1', 'Wi-Fi Bad Client (Auth Failures for Mist PCAP)')
         ]
+        
+        traffic_status_data = {}
         
         for service, interface, description in client_services:
             try:
@@ -612,12 +612,22 @@ def traffic_status():
                             ip_info = line.strip().split()[1]
                             break
                 
+                # Get recent log entries from the integrated service
+                log_file_map = {
+                    'wired-test': 'wired.log',
+                    'wifi-good': 'wifi-good.log', 
+                    'wifi-bad': 'wifi-bad.log'
+                }
+                log_file = log_file_map.get(service, f'{service}.log')
+                recent_logs = read_log_file(log_file, 5) if os.path.exists(os.path.join(LOG_DIR, log_file)) else []
+                
                 traffic_status_data[interface] = {
                     'service_status': status,
                     'ip_address': ip_info,
-                    'recent_logs': [],
-                    'log_file_exists': True,
-                    'description': description
+                    'recent_logs': recent_logs,
+                    'log_file_exists': os.path.exists(os.path.join(LOG_DIR, log_file)),
+                    'description': description,
+                    'service_name': service  # Add service name for reference
                 }
                 
             except Exception as e:
@@ -626,12 +636,14 @@ def traffic_status():
                     'ip_address': 'unknown',
                     'recent_logs': [],
                     'log_file_exists': False,
-                    'description': description
+                    'description': description,
+                    'service_name': service
                 }
         
         return jsonify({
             "interfaces": traffic_status_data,
-            "success": True
+            "success": True,
+            "architecture": "integrated"  # Indicate this is integrated architecture
         })
     except Exception as e:
         logger.error(f"Error in traffic_status endpoint: {e}")
@@ -639,7 +651,7 @@ def traffic_status():
 
 @app.route("/traffic_action", methods=["POST"])
 def traffic_action():
-    """Start/stop/restart traffic generation services"""
+    """Start/stop/restart integrated client services"""
     try:
         interface = request.form.get("interface")
         action = request.form.get("action")
@@ -653,13 +665,23 @@ def traffic_action():
         if action not in ['start', 'stop', 'restart']:
             return jsonify({"success": False, "error": "Invalid action"}), 400
         
-        service_name = f"traffic-{interface}"
+        # Map interfaces to integrated service names
+        service_map = {
+            'eth0': 'wired-test',
+            'wlan0': 'wifi-good', 
+            'wlan1': 'wifi-bad'
+        }
+        
+        service_name = service_map.get(interface)
+        if not service_name:
+            return jsonify({"success": False, "error": f"No service mapped for interface {interface}"}), 400
+        
         result = subprocess.run(['sudo', 'systemctl', action, f'{service_name}.service'], 
                               capture_output=True, text=True, timeout=15)
         
         if result.returncode == 0:
-            log_action(f"Traffic service {service_name} {action}ed via UI")
-            return jsonify({"success": True, "message": f"Service {service_name} {action}ed successfully"})
+            log_action(f"Integrated service {service_name} {action}ed via UI (interface: {interface})")
+            return jsonify({"success": True, "message": f"Integrated service {service_name} {action}ed successfully"})
         else:
             logger.error(f"Failed to {action} service {service_name}: {result.stderr}")
             return jsonify({"success": False, "error": f"Failed to {action} service: {result.stderr}"}), 500
