@@ -1,55 +1,82 @@
-# Wi-Fi Test Dashboard v5.0.0
+# Wi-Fi Test Dashboard v5.1.0
 
-🌐 **Advanced Raspberry Pi Traffic Generator for Juniper Mist PoC Demonstrations**
+🌐 **Advanced Raspberry Pi Traffic Generator with Wi-Fi Roaming for Juniper Mist PoC Demonstrations**
 
-A comprehensive network testing platform that simulates multiple client types across ethernet and Wi-Fi interfaces, designed specifically for Juniper Mist Proof of Concept demonstrations.
+A comprehensive network testing platform that simulates realistic client behavior including **Wi-Fi roaming between access points**, designed specifically for Juniper Mist Proof of Concept demonstrations.
 
-## 🚀 Features
+## 🆕 **What's New in v5.1.0**
 
-### Multi-Interface Traffic Generation
-- **Ethernet (eth0)**: Heavy traffic simulation with speedtest CLI, large downloads, and YouTube streaming
-- **Wi-Fi Adapter 1 (wlan0)**: Medium intensity traffic with good authentication simulation
-- **Wi-Fi Adapter 2 (wlan1)**: Light traffic with authentication failure simulation
+### 🔄 **Wi-Fi Roaming Simulation**
+- **Automatic BSSID Discovery**: Scans and catalogs all access points broadcasting the same SSID
+- **Intelligent Roaming**: Automatically roams between APs every 2 minutes based on signal strength
+- **Traffic Continuity**: Maintains downloads and data flows during roaming events
+- **Demo-Ready Logging**: Enhanced logs perfect for live PoC demonstrations
+- **Mist Analytics**: Full visibility of client roaming patterns in Mist dashboard
 
-### Advanced Traffic Types
+### 🏗️ **Integrated Architecture** 
+- **Consolidated Services**: Traffic generation now integrated within client simulation services
+- **Enhanced Performance**: Reduced resource usage and improved reliability
+- **Simplified Management**: Fewer services to monitor and troubleshoot
+
+## 🚀 **Features**
+
+### **Wi-Fi Client Roaming Simulation**
+- **Multi-BSSID Discovery**: Automatically finds all APs broadcasting the target SSID
+- **Signal-Based Roaming**: Intelligently selects target APs based on signal strength
+- **Configurable Intervals**: Customizable roaming frequency (default: every 2 minutes)
+- **Roaming Analytics**: Detailed logging of roaming events for Mist dashboard visibility
+- **Traffic Persistence**: Seamless data flow continuation during roaming events
+
+### **Multi-Interface Traffic Generation**
+- **Ethernet (eth0)**: Heavy traffic simulation with integrated speedtest and downloads
+- **Wi-Fi Primary (wlan0)**: Good client with roaming + medium intensity traffic
+- **Wi-Fi Secondary (wlan1)**: Authentication failure simulation for security testing
+
+### **Advanced Traffic Types**
 - **Speedtest CLI Integration**: Automated bandwidth testing across all interfaces
-- **YouTube Traffic Simulation**: Video streaming simulation using yt-dlp/youtube-dl
+- **YouTube Traffic Simulation**: Video streaming simulation using yt-dlp
 - **HTTP/HTTPS Downloads**: Concurrent file downloads from multiple sources
-- **Ping Traffic**: Continuous connectivity testing
+- **Continuous Ping Traffic**: Connectivity testing and latency monitoring
 - **Network Emulation**: Built-in latency and packet loss simulation (netem)
 
-### Client Simulation
-- **Good Wi-Fi Client**: Successful authentication and normal traffic patterns
-- **Bad Wi-Fi Client**: Authentication failure simulation for testing security policies
+### **Client Simulation**
+- **Good Wi-Fi Client**: Successful authentication with realistic roaming behavior
+- **Bad Wi-Fi Client**: Authentication failure simulation for security policy testing
 - **Wired Client**: Ethernet-based traffic generation with DHCP hostname identification
 
-### Management & Monitoring
+### **Management & Monitoring**
 - **Web Dashboard**: Real-time monitoring and configuration (port 5000)
-- **Traffic Control Interface**: Per-interface traffic management
-- **Comprehensive Logging**: Detailed logs for all services and traffic types
-- **Service Management**: Start/stop/restart individual components
+- **Enhanced Logging**: Scrollable logs with roaming event details
+- **Interface Assignment**: Automatic detection and optimal assignment of network interfaces
+- **Service Management**: Integrated traffic generation within client services
 - **System Controls**: Remote reboot/shutdown capabilities
 
-## 📋 Requirements
+## 📋 **Requirements**
 
-### Hardware
+### **Hardware**
 - Raspberry Pi 4 (recommended) or Pi 3B+
 - MicroSD card (32GB+ recommended)
-- 2x USB Wi-Fi adapters (in addition to built-in Wi-Fi)
+- **2x USB Wi-Fi adapters** (for full roaming demonstration)
 - Ethernet connection for wired testing
+- **Multiple APs broadcasting the same SSID** (for roaming)
 
-### Software
+### **Software**
 - Raspberry Pi OS (Bullseye or newer)
 - Internet connection for installation
 
-## 🛠 Installation
+### **Network Setup for Roaming**
+- **2+ Access Points** broadcasting identical SSID and security settings
+- **Overlapping coverage** where Pi can receive signals from multiple APs
+- **Different BSSIDs** (each AP will have unique MAC address)
 
-### Quick Install (Recommended)
+## 🛠 **Installation**
+
+### **Quick Install (Recommended)**
 ```bash
 curl -sSL https://raw.githubusercontent.com/danryan06/wifi-dashboard/main/install.sh | sudo bash
 ```
 
-### Manual Installation
+### **Manual Installation**
 1. Clone the repository:
 ```bash
 git clone https://github.com/danryan06/wifi-dashboard.git
@@ -61,227 +88,298 @@ cd wifi-dashboard
 sudo ./install.sh
 ```
 
-### Installation Features
+### **Installation Features**
 - **Automatic cleanup**: Removes previous installations
-- **Dependency management**: Installs all required packages
-- **Service configuration**: Sets up systemd services
-- **Permission handling**: Configures sudo access for network operations
-- **Verification**: Tests installation integrity
+- **Intelligent interface detection**: Auto-assigns optimal Wi-Fi interfaces
+- **Dependency management**: Installs all required packages including roaming tools
+- **Service configuration**: Sets up integrated traffic generation services
+- **Roaming capability**: Enables Wi-Fi roaming simulation by default
+- **Verification**: Tests installation integrity and roaming readiness
 
-## 🎯 Usage
+## 🎯 **Usage**
 
-### 1. Access the Dashboard
+### **1. Access the Dashboard**
 Open your web browser and navigate to:
 ```
 http://[PI_IP_ADDRESS]:5000
 ```
 
-### 2. Configure Wi-Fi Settings
+### **2. Configure Wi-Fi Settings**
 1. Go to the **Wi-Fi Config** tab
 2. Enter your target SSID and password
 3. Click **Save Configuration**
-4. Services will automatically restart with new settings
+4. Services will automatically restart with roaming enabled
 
-### 3. Monitor Traffic Generation
-- **Status Tab**: Real-time system information and service status
-- **Logs Tab**: View detailed logs from all services
-- **Traffic Control**: Manage per-interface traffic generation
+### **3. Monitor Roaming Activity**
+- **Status Tab**: Real-time system information and interface assignments
+- **Interfaces Tab**: View automatic interface assignments and capabilities
+- **Logs Tab**: Watch live roaming events and traffic generation
+- **Enhanced Log Viewing**: Scrollable logs with roaming event details
 
-### 4. Network Emulation
-Use the **Network Emulation** tab to simulate:
-- Network latency (0-5000ms)
-- Packet loss (0-100%)
+### **4. Verify Roaming Setup**
+```bash
+# Check for multiple BSSIDs with your SSID
+sudo nmcli device wifi list | grep "YourSSID"
 
-## 🔧 Configuration
+# Monitor roaming events live
+sudo journalctl -u wifi-good.service -f | grep -E "(Roaming|BSSID|📡|🔄)"
 
-### Traffic Intensity Settings
-Each interface supports different traffic intensities:
+# Check roaming configuration
+grep "ROAMING" /home/pi/wifi_test_dashboard/configs/settings.conf
+```
 
-**Light**: 
-- Speedtest every 10 minutes
-- Downloads every 5 minutes
-- 2 concurrent downloads
-- 50MB chunks
+## 🔧 **Configuration**
 
-**Medium**:
-- Speedtest every 5 minutes  
-- Downloads every 2 minutes
-- 3 concurrent downloads
-- 100MB chunks
-
-**Heavy**:
-- Speedtest every 3 minutes
-- Downloads every minute
-- 5 concurrent downloads
-- 200MB chunks
-
-### Interface Configuration
+### **Roaming Configuration**
 Edit `/home/pi/wifi_test_dashboard/configs/settings.conf`:
 
 ```bash
-# Per-interface traffic settings
-ETH0_TRAFFIC_TYPE=all
-ETH0_TRAFFIC_INTENSITY=heavy
-WLAN0_TRAFFIC_TYPE=all
-WLAN0_TRAFFIC_INTENSITY=medium
-WLAN1_TRAFFIC_TYPE=ping
-WLAN1_TRAFFIC_INTENSITY=light
-
-# YouTube traffic settings
-ENABLE_YOUTUBE_TRAFFIC=true
-YOUTUBE_PLAYLIST_URL=https://www.youtube.com/playlist?list=PLrAXtmRdnEQy5tts6p-v1URsm7wOSM-M0
+# Wi-Fi Roaming Settings
+WIFI_ROAMING_ENABLED=true              # Enable roaming simulation
+WIFI_ROAMING_INTERVAL=120              # Roam every 2 minutes
+WIFI_ROAMING_SCAN_INTERVAL=30          # Scan for BSSIDs every 30 seconds
+WIFI_MIN_SIGNAL_THRESHOLD=-75          # Minimum signal strength (dBm)
+WIFI_ROAMING_VERBOSE_LOGGING=true      # Enhanced demo logging
 ```
 
-## 📊 Services Overview
+### **Traffic Intensity Settings**
+```bash
+# Per-interface traffic settings
+ETH0_TRAFFIC_INTENSITY=heavy           # Ethernet: Heavy traffic
+WLAN0_TRAFFIC_INTENSITY=medium         # Wi-Fi Primary: Medium traffic + roaming
+WLAN1_TRAFFIC_INTENSITY=light          # Wi-Fi Secondary: Auth failures only
 
-### Core Services
+# Enhanced roaming traffic
+WIFI_GOOD_INTEGRATED_TRAFFIC=true      # Traffic continues during roaming
+DEMO_TRAFFIC_CONTINUITY=true           # Maintain traffic flow for demos
+```
+
+### **Mist Demo Optimizations**
+```bash
+# Demo-specific settings
+MIST_DEMO_MODE=true                    # Enable demo-friendly features
+MIST_ROAMING_NOTIFICATIONS=true        # Enhanced roaming event logging
+DEMO_ROAMING_FREQUENCY=enhanced        # More frequent roaming for demo impact
+```
+
+## 📊 **Services Architecture**
+
+### **Integrated Services (v5.1.0)**
 - `wifi-dashboard.service`: Web interface (Flask application)
-- `wired-test.service`: Ethernet client simulation
-- `wifi-good.service`: Successful Wi-Fi client simulation  
-- `wifi-bad.service`: Failed authentication simulation
+- `wired-test.service`: Ethernet client simulation with integrated heavy traffic
+- `wifi-good.service`: Wi-Fi client with roaming simulation and integrated medium traffic
+- `wifi-bad.service`: Authentication failure simulation for security testing
 
-### Traffic Generation Services
-- `traffic-eth0.service`: Ethernet traffic generation
-- `traffic-wlan0.service`: Wi-Fi adapter 1 traffic generation
-- `traffic-wlan1.service`: Wi-Fi adapter 2 traffic generation
-
-### Service Management
+### **Service Management**
 ```bash
 # View service status
-sudo systemctl status wifi-dashboard.service
+sudo systemctl status wifi-dashboard wifi-good wifi-bad wired-test
 
-# Restart a service
-sudo systemctl restart traffic-eth0.service
+# Monitor roaming client
+sudo systemctl status wifi-good.service
 
-# View real-time logs
+# View real-time roaming logs
 sudo journalctl -u wifi-good.service -f
 
-# Check all services
-sudo systemctl status wifi-dashboard wired-test wifi-good wifi-bad traffic-*
+# Restart roaming client
+sudo systemctl restart wifi-good.service
 ```
 
-## 🗂 Directory Structure
+## 🗂 **Directory Structure**
 
 ```
 /home/pi/wifi_test_dashboard/
-├── app.py                          # Flask web application
+├── app.py                              # Flask web application with enhanced interface view
+├── INTERFACE_ASSIGNMENT.md             # Auto-generated interface assignment summary
 ├── configs/
-│   ├── ssid.conf                   # Wi-Fi credentials (SSID/password)
-│   └── settings.conf               # System configuration
+│   ├── ssid.conf                       # Wi-Fi credentials (SSID/password)
+│   ├── settings.conf                   # System configuration with roaming settings
+│   └── interface-assignments.conf     # Auto-detected interface assignments
 ├── scripts/
-│   ├── interface_traffic_generator.sh   # Main traffic generator
-│   ├── wired_simulation.sh              # Ethernet client simulation
-│   ├── connect_and_curl.sh              # Wi-Fi good client
-│   └── fail_auth_loop.sh                # Wi-Fi bad client
+│   ├── traffic/
+│   │   ├── connect_and_curl.sh         # Wi-Fi good client with roaming (ENHANCED)
+│   │   ├── fail_auth_loop.sh           # Wi-Fi bad client (auth failures)
+│   │   ├── wired_simulation.sh         # Wired client with integrated traffic
+│   │   └── interface_traffic_generator.sh # Shared traffic generator
+│   ├── install/                        # Installation sub-scripts
+│   ├── diagnose-dashboard.sh           # System diagnostic tool
+│   └── fix-services.sh                 # Service repair utility
 ├── templates/
-│   ├── dashboard.html              # Main web interface
-│   └── traffic_control.html        # Traffic management interface
+│   ├── dashboard.html                  # Enhanced web interface with interface view
+│   └── traffic_control.html            # Traffic management interface
 └── logs/
-    ├── main.log                    # Dashboard logs
-    ├── wired.log                   # Ethernet client logs
-    ├── wifi-good.log               # Good Wi-Fi client logs
-    ├── wifi-bad.log                # Bad Wi-Fi client logs
-    ├── traffic-eth0.log            # Ethernet traffic logs
-    ├── traffic-wlan0.log           # Wi-Fi adapter 1 traffic logs
-    └── traffic-wlan1.log           # Wi-Fi adapter 2 traffic logs
+    ├── main.log                        # Dashboard logs
+    ├── wired.log                       # Ethernet client logs
+    ├── wifi-good.log                   # Wi-Fi good client with roaming event logs
+    └── wifi-bad.log                    # Wi-Fi bad client logs
 ```
 
-## 🔍 Troubleshooting
+## 🔍 **Roaming Monitoring & Troubleshooting**
 
-### Common Issues
-
-**Services not starting:**
+### **Roaming Event Logs**
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl restart wifi-dashboard.service
+# Watch roaming events in real-time
+sudo journalctl -u wifi-good.service -f | grep -E "(🔍|📡|🔄|✅|📍)"
+
+# Check recent roaming activity
+grep -E "(Roaming|BSSID)" /home/pi/wifi_test_dashboard/logs/wifi-good.log | tail -10
+
+# Verify BSSID discovery
+grep "Found BSSID" /home/pi/wifi_test_dashboard/logs/wifi-good.log
 ```
 
-**Wi-Fi adapters not detected:**
+### **Expected Roaming Log Messages**
 ```bash
-# Check interface availability
-ip link show
-
-# Ensure NetworkManager manages interfaces
-sudo nmcli device set wlan0 managed yes
-sudo nmcli device set wlan1 managed yes
+[2024-XX-XX XX:XX:XX] WIFI-GOOD: 🔍 Scanning for BSSIDs broadcasting SSID: YourSSID
+[2024-XX-XX XX:XX:XX] WIFI-GOOD: 📡 Found BSSID: aa:bb:cc:dd:ee:f1 (Signal: -42dBm)
+[2024-XX-XX XX:XX:XX] WIFI-GOOD: 📡 Found BSSID: aa:bb:cc:dd:ee:f2 (Signal: -48dBm)
+[2024-XX-XX XX:XX:XX] WIFI-GOOD: 🎯 Multiple BSSIDs found (2) - roaming enabled!
+[2024-XX-XX XX:XX:XX] WIFI-GOOD: ⏰ Roaming interval reached, evaluating roaming opportunity...
+[2024-XX-XX XX:XX:XX] WIFI-GOOD: 🔄 Initiating roaming to BSSID: aa:bb:cc:dd:ee:f2
+[2024-XX-XX XX:XX:XX] WIFI-GOOD: ✅ Roaming successful! Connected to: aa:bb:cc:dd:ee:f2
+[2024-XX-XX XX:XX:XX] WIFI-GOOD: 📍 Current: BSSID aa:bb:cc:dd:ee:f2 (-48dBm) | Available BSSIDs: 2
 ```
 
-**Permission errors:**
+### **Common Roaming Issues**
+
+#### **Only One BSSID Found**
 ```bash
-# Verify sudoers configuration
-sudo visudo -f /etc/sudoers.d/wifi_test_dashboard
+# Check if multiple APs are broadcasting the same SSID
+sudo nmcli device wifi list | grep "YourSSID"
+
+# Ensure APs have overlapping coverage
+iwconfig wlan0  # Check current signal strength
+
+# Verify roaming is enabled
+grep "WIFI_ROAMING_ENABLED" /home/pi/wifi_test_dashboard/configs/settings.conf
 ```
 
-**Traffic generation not working:**
+#### **Roaming Not Occurring**
 ```bash
-# Check interface IP addresses
-ip addr show eth0
-ip addr show wlan0
-ip addr show wlan1
+# Check roaming interval hasn't been reached
+grep "Roaming interval reached" /home/pi/wifi_test_dashboard/logs/wifi-good.log
 
-# Test interface connectivity
-ping -I eth0 8.8.8.8
+# Verify signal thresholds
+grep "signal.*threshold" /home/pi/wifi_test_dashboard/logs/wifi-good.log
+
+# Check for roaming errors
+grep -i "roaming.*fail" /home/pi/wifi_test_dashboard/logs/wifi-good.log
 ```
 
-### Log Analysis
+### **Performance Optimization**
+
+#### **Hardware Optimization**
+- **Position Pi** where it receives signals from multiple APs
+- **Use external antennas** if built-in signal is weak
+- **Ensure USB Wi-Fi adapters** are properly detected
+- **Check power supply** - roaming requires stable power
+
+#### **Configuration Tuning**
 ```bash
-# View all logs simultaneously
-sudo journalctl -u wifi-dashboard -u wired-test -u wifi-good -u wifi-bad -f
+# Faster roaming for demos
+WIFI_ROAMING_INTERVAL=90               # Roam every 1.5 minutes
 
-# Check traffic generation logs
-tail -f /home/pi/wifi_test_dashboard/logs/traffic-*.log
+# More sensitive signal detection
+WIFI_MIN_SIGNAL_THRESHOLD=-80          # Accept weaker signals
 
-# Debug network issues
-sudo nmcli connection show --active
+# Enhanced scanning
+WIFI_ROAMING_SCAN_INTERVAL=20          # Scan every 20 seconds
 ```
 
-### Performance Optimization
-- Monitor CPU usage: `top` or `htop`
-- Check memory usage: `free -h`
-- Monitor network interfaces: `iftop` or `nethogs`
-- Adjust traffic intensity in settings.conf
+## 🎪 **Mist PoC Demonstration**
 
-## 🛡 Security Considerations
+### **What Mist Dashboard Will Show**
+1. **Client Roaming Events**: Real-time client movement between APs
+2. **Roaming Analytics**: Success rates, timing, signal strength patterns
+3. **Traffic Continuity**: Uninterrupted data flow during roaming
+4. **RF Analytics**: Signal strength trends and roaming triggers
+5. **Client Journey**: Complete path of client movement through the network
 
-- Dashboard runs on port 5000 (consider firewall rules)
+### **Demo Talking Points**
+- *"Watch our simulated client automatically roam between your access points every 2 minutes..."*
+- *"Notice how Mist tracks the client's movement and provides detailed roaming analytics..."*
+- *"See how traffic continues seamlessly during roaming events - no interruption to user experience..."*
+- *"Mist's AI learns from these patterns to optimize AP placement and roaming parameters..."*
+- *"The client appears with hostname 'CNXNMist-WiFiGood-Roaming' for easy identification..."*
+
+### **Live Demo Commands**
+```bash
+# Show current connection
+iwconfig wlan0 | grep "Access Point"
+
+# Monitor roaming live during demo
+sudo journalctl -u wifi-good.service -f | grep --color=always -E "(🔄|✅|📍)"
+
+# Show all discovered BSSIDs
+sudo nmcli device wifi list | grep "DemoSSID"
+
+# Display roaming statistics
+grep -c "Roaming successful" /home/pi/wifi_test_dashboard/logs/wifi-good.log
+```
+
+## 🛡 **Security Considerations**
+
+- Dashboard runs on port 5000 (consider firewall rules for customer networks)
 - Wi-Fi credentials stored in `/home/pi/wifi_test_dashboard/configs/ssid.conf` (permissions 600)
-- Sudo permissions configured for network operations only
-- Services run as pi user (not root)
+- Roaming generates connection events that may trigger security monitoring
+- Authentication failure simulation (bad client) is clearly logged for security teams
+- Services run as pi user (not root) for security isolation
 
-## 🤝 Contributing
+## 🤝 **Contributing**
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature-name`
-3. Commit changes: `git commit -am 'Add feature'`
-4. Push to branch: `git push origin feature-name`
-5. Submit a pull request
+3. Test roaming functionality with multiple APs
+4. Commit changes: `git commit -am 'Add roaming enhancement'`
+5. Push to branch: `git push origin feature-name`
+6. Submit a pull request
 
-## 📄 License
+## 📄 **License**
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🏷 Version History
+## 🏷 **Version History**
 
-### v5.0.0 (Current)
+### **v5.1.0 (Current) - Enhanced Wi-Fi Roaming**
+- ✅ **Wi-Fi client roaming simulation** between multiple BSSIDs
+- ✅ **Intelligent BSSID discovery** and signal-based roaming decisions
+- ✅ **Traffic continuity** during roaming events for realistic behavior
+- ✅ **Enhanced logging** with roaming event details for PoC demonstrations
+- ✅ **Integrated traffic generation** within client simulation services
+- ✅ **Auto-interface assignment** with capability detection
+- ✅ **Mist PoC optimizations** including demo-friendly hostnames and logging
+- ✅ **Improved web interface** with interface assignment visualization
+
+### **v5.0.0 - Advanced Traffic Generation**
 - Enhanced traffic generation with speedtest CLI and YouTube simulation
 - Per-interface traffic control and monitoring
 - Improved web interface with traffic control page
 - Advanced logging and monitoring capabilities
 - Modular installation system
 
-### v4.8.0
+### **v4.8.0 - Foundation**
 - Basic multi-interface support
 - Web dashboard implementation
 - Service-based architecture
 - Network emulation support
 
-## 📞 Support
+## 📞 **Support**
 
-For issues and questions:
-- Open an issue on GitHub
-- Check the troubleshooting section above
-- Review system logs for error details
+### **For Technical Issues:**
+- **Check logs first**: `/home/pi/wifi_test_dashboard/logs/wifi-good.log`
+- **Run diagnostics**: `sudo bash /home/pi/wifi_test_dashboard/scripts/diagnose-dashboard.sh`
+- **Verify roaming setup**: Ensure multiple APs broadcast the same SSID
+- **Open GitHub issue** with system info and logs
+
+### **For Mist PoC Support:**
+- **Verify interface assignments**: Check `INTERFACE_ASSIGNMENT.md`
+- **Confirm roaming events**: Monitor logs during demonstration
+- **Check Mist dashboard**: Verify client appears with roaming hostname
+- **Signal strength**: Ensure Pi receives adequate signal from multiple APs
+
+### **Repository Information:**
+- **Main Repository**: https://github.com/danryan06/wifi-dashboard
+- **Issues**: https://github.com/danryan06/wifi-dashboard/issues
+- **Documentation**: https://github.com/danryan06/wifi-dashboard/wiki
 
 ---
-
-**Built for Juniper Mist PoC demonstrations** 🌐
