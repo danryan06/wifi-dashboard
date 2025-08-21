@@ -191,34 +191,82 @@ discover_bssids_for_ssid() {
     DISCOVERED_BSSIDS=()
     BSSID_SIGNALS=()
     
-    # Trigger fresh scan
+    # Trigger fresh scan with longer wait
     nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
-    sleep 3
-    
-    # Parse scan results for our target SSID
-    local scan_output
-    scan_output=$(nmcli -t -f BSSID,SSID,SIGNAL device wifi list ifname "$INTERFACE" 2>/dev/null || echo "")
+    sleep 5  # Increased from 3 to 5 seconds
     
     local bssid_count=0
-    while IFS=':' read -r bssid ssid signal; do
-        # Clean up fields
-        bssid=$(echo "$bssid" | tr -d '\*' | xargs)
-        ssid=$(echo "$ssid" | xargs)
-        signal=$(echo "$signal" | xargs)
+    
+    # Use the standard nmcli format (not tabular) which is more reliable
+    while read -r line; do
+        # Skip header and empty lines
+        [[ "$line" =~ ^(IN-USE|--|\s*$) ]] && continue
         
-        # Check if this matches our target SSID
-        if [[ "$ssid" == "$target_ssid" ]] && [[ -n "$bssid" ]] && [[ "$bssid" != "--" ]]; then
-            DISCOVERED_BSSIDS["$bssid"]="$ssid"
-            BSSID_SIGNALS["$bssid"]="$signal"
-            log_msg "📡 Found BSSID: $bssid (Signal: ${signal}dBm)"
-            ((bssid_count++))
+        # Look for lines containing our target SSID
+        if echo "$line" | grep -q "$target_ssid"; then
+            # Parse the line - BSSID is typically the 2nd field, signal is later
+            local bssid=$(echo "$line" | awk '{print $2}')
+            local signal=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/ && $i >= 0 && $i <= 100) print $i}' | head -1)
+            
+            # Clean up BSSID (remove asterisks, whitespace)
+            bssid=$(echo "$bssid" | tr -d '\*' | tr -d ' ')
+            
+            # Validate BSSID format (MAC address)
+            if [[ "$bssid" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
+                # Convert signal to dBm format if it's a percentage
+                if [[ -n "$signal" ]] && [[ "$signal" =~ ^[0-9]+$ ]]; then
+                    if [[ $signal -le 100 ]]; then
+                        # Convert percentage to approximate dBm (rough conversion)
+                        signal=$(( -100 + (signal * 70 / 100) ))
+                    fi
+                fi
+                
+                DISCOVERED_BSSIDS["$bssid"]="$target_ssid"
+                BSSID_SIGNALS["$bssid"]="${signal:-unknown}"
+                log_msg "📡 Found BSSID: $bssid (Signal: ${signal:-unknown}dBm)"
+                ((bssid_count++))
+            fi
         fi
-    done <<< "$scan_output"
+    done < <(nmcli device wifi list ifname "$INTERFACE" 2>/dev/null)
+    
+    # If still no results, try the tabular format as backup
+    if [[ $bssid_count -eq 0 ]]; then
+        log_msg "🔄 Trying tabular format as backup..."
+        
+        local scan_output
+        scan_output=$(nmcli -t -f BSSID,SSID,SIGNAL device wifi list ifname "$INTERFACE" 2>/dev/null || echo "")
+        
+        while IFS=':' read -r bssid ssid signal; do
+            # Clean up fields
+            bssid=$(echo "$bssid" | tr -d '\*' | tr -d ' ')
+            ssid=$(echo "$ssid" | tr -d ' ')
+            signal=$(echo "$signal" | tr -d ' ')
+            
+            if [[ "$ssid" == "$target_ssid" ]] && [[ -n "$bssid" ]] && [[ "$bssid" != "--" ]] && [[ "$bssid" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
+                DISCOVERED_BSSIDS["$bssid"]="$ssid"
+                BSSID_SIGNALS["$bssid"]="$signal"
+                log_msg "📡 Found BSSID: $bssid (Signal: ${signal}dBm)"
+                ((bssid_count++))
+            fi
+        done <<< "$scan_output"
+    fi
     
     LAST_SCAN_TIME=$current_time
     
+    # Debug output if no BSSIDs found
     if [[ $bssid_count -eq 0 ]]; then
         log_msg "⚠ No BSSIDs found for SSID: $target_ssid"
+        log_msg "🔍 Debug: Available SSIDs on $INTERFACE:"
+        nmcli device wifi list ifname "$INTERFACE" 2>/dev/null | grep -E "(SSID|$target_ssid)" | head -5 | while read -r line; do
+            log_msg "   $line"
+        done
+        
+        # Additional debug with iwconfig
+        log_msg "🔍 Debug: Current iwconfig state:"
+        iwconfig "$INTERFACE" 2>/dev/null | grep -E "(ESSID|Access Point)" | while read -r line; do
+            log_msg "   $line"
+        done
+        
         return 1
     elif [[ $bssid_count -eq 1 ]]; then
         log_msg "📶 Single BSSID found - roaming not possible"
@@ -227,9 +275,56 @@ discover_bssids_for_ssid() {
         fi
     else
         log_msg "🎯 Multiple BSSIDs found ($bssid_count) - roaming enabled!"
+        
+        # Show all discovered BSSIDs for demo purposes
+        for bssid in "${!DISCOVERED_BSSIDS[@]}"; do
+            local signal="${BSSID_SIGNALS[$bssid]}"
+            log_msg "🏠 Available: $bssid (${signal}dBm)"
+        done
     fi
     
     return 0
+}
+
+# Additional helper function to validate connectivity
+test_interface_connectivity() {
+    local interface="$1"
+    local test_count=0
+    local success_count=0
+    
+    log_msg "🧪 Testing connectivity on $interface"
+    
+    # Test 1: Basic ping
+    ((test_count++))
+    if timeout 10 ping -I "$interface" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then
+        log_msg "✓ Ping test passed"
+        ((success_count++))
+    else
+        log_msg "✗ Ping test failed"
+    fi
+    
+    # Test 2: DNS resolution
+    ((test_count++))
+    if timeout 10 nslookup google.com >/dev/null 2>&1; then
+        log_msg "✓ DNS resolution passed"
+        ((success_count++))
+    else
+        log_msg "✗ DNS resolution failed"
+    fi
+    
+    # Test 3: HTTP connectivity
+    ((test_count++))
+    if timeout 15 curl --interface "$interface" --max-time 10 -fsSL -o /dev/null https://www.google.com 2>/dev/null; then
+        log_msg "✓ HTTP connectivity passed"
+        ((success_count++))
+    else
+        log_msg "✗ HTTP connectivity failed"
+    fi
+    
+    log_msg "🎯 Connectivity: $success_count/$test_count tests passed"
+    
+    # Return success if at least one test passed
+    return $([[ $success_count -gt 0 ]] && echo 0 || echo 1)
 }
 
 get_current_bssid() {
