@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Enhanced Wi-Fi Good Client Simulation with BSSID Roaming
+# Enhanced Wi-Fi Good Client Simulation with BSSID Roaming - FIXED VERSION
 # Complete good client behavior: Authentication + Connection + Roaming + Realistic Traffic Generation
 # This represents a real user's device that successfully connects and roams between APs
 
@@ -175,7 +175,7 @@ check_wifi_interface() {
     return 0
 }
 
-# --- BSSID Discovery and Management ---
+# --- FIXED BSSID Discovery and Management ---
 discover_bssids_for_ssid() {
     local target_ssid="$1"
     local current_time=$(date +%s)
@@ -191,21 +191,22 @@ discover_bssids_for_ssid() {
     DISCOVERED_BSSIDS=()
     BSSID_SIGNALS=()
     
-    # Trigger fresh scan with longer wait
+    # Trigger fresh scan and wait longer for results
     nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
-    sleep 5  # Increased from 3 to 5 seconds
+    sleep 5  # Increased wait time
     
     local bssid_count=0
     
-    # Use the standard nmcli format (not tabular) which is more reliable
+    # FIXED: Parse nmcli output correctly - BSSID is field 1, not field 2
     while read -r line; do
         # Skip header and empty lines
         [[ "$line" =~ ^(IN-USE|--|\s*$) ]] && continue
         
         # Look for lines containing our target SSID
         if echo "$line" | grep -q "$target_ssid"; then
-            # Parse the line - BSSID is typically the 2nd field, signal is later
-            local bssid=$(echo "$line" | awk '{print $2}')
+            # FIXED: BSSID is field 1 (first column after any IN-USE marker)
+            local bssid=$(echo "$line" | awk '{print $1}')
+            # Extract signal strength (look for numbers between 0-100)
             local signal=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/ && $i >= 0 && $i <= 100) print $i}' | head -1)
             
             # Clean up BSSID (remove asterisks, whitespace)
@@ -213,10 +214,10 @@ discover_bssids_for_ssid() {
             
             # Validate BSSID format (MAC address)
             if [[ "$bssid" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
-                # Convert signal to dBm format if it's a percentage
+                # Convert signal to dBm if needed
                 if [[ -n "$signal" ]] && [[ "$signal" =~ ^[0-9]+$ ]]; then
                     if [[ $signal -le 100 ]]; then
-                        # Convert percentage to approximate dBm (rough conversion)
+                        # Convert percentage to approximate dBm
                         signal=$(( -100 + (signal * 70 / 100) ))
                     fi
                 fi
@@ -229,7 +230,7 @@ discover_bssids_for_ssid() {
         fi
     done < <(nmcli device wifi list ifname "$INTERFACE" 2>/dev/null)
     
-    # If still no results, try the tabular format as backup
+    # Fallback to tabular format if needed
     if [[ $bssid_count -eq 0 ]]; then
         log_msg "🔄 Trying tabular format as backup..."
         
@@ -253,15 +254,13 @@ discover_bssids_for_ssid() {
     
     LAST_SCAN_TIME=$current_time
     
-    # Debug output if no BSSIDs found
     if [[ $bssid_count -eq 0 ]]; then
         log_msg "⚠ No BSSIDs found for SSID: $target_ssid"
         log_msg "🔍 Debug: Available SSIDs on $INTERFACE:"
-        nmcli device wifi list ifname "$INTERFACE" 2>/dev/null | grep -E "(SSID|$target_ssid)" | head -5 | while read -r line; do
+        nmcli device wifi list ifname "$INTERFACE" 2>/dev/null | head -5 | while read -r line; do
             log_msg "   $line"
         done
         
-        # Additional debug with iwconfig
         log_msg "🔍 Debug: Current iwconfig state:"
         iwconfig "$INTERFACE" 2>/dev/null | grep -E "(ESSID|Access Point)" | while read -r line; do
             log_msg "   $line"
@@ -284,47 +283,6 @@ discover_bssids_for_ssid() {
     fi
     
     return 0
-}
-
-# Additional helper function to validate connectivity
-test_interface_connectivity() {
-    local interface="$1"
-    local test_count=0
-    local success_count=0
-    
-    log_msg "🧪 Testing connectivity on $interface"
-    
-    # Test 1: Basic ping
-    ((test_count++))
-    if timeout 10 ping -I "$interface" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then
-        log_msg "✓ Ping test passed"
-        ((success_count++))
-    else
-        log_msg "✗ Ping test failed"
-    fi
-    
-    # Test 2: DNS resolution
-    ((test_count++))
-    if timeout 10 nslookup google.com >/dev/null 2>&1; then
-        log_msg "✓ DNS resolution passed"
-        ((success_count++))
-    else
-        log_msg "✗ DNS resolution failed"
-    fi
-    
-    # Test 3: HTTP connectivity
-    ((test_count++))
-    if timeout 15 curl --interface "$interface" --max-time 10 -fsSL -o /dev/null https://www.google.com 2>/dev/null; then
-        log_msg "✓ HTTP connectivity passed"
-        ((success_count++))
-    else
-        log_msg "✗ HTTP connectivity failed"
-    fi
-    
-    log_msg "🎯 Connectivity: $success_count/$test_count tests passed"
-    
-    # Return success if at least one test passed
-    return $([[ $success_count -gt 0 ]] && echo 0 || echo 1)
 }
 
 get_current_bssid() {
@@ -504,37 +462,60 @@ connect_to_wifi_with_roaming() {
         fi
     done
 
-    # Create initial connection
-    local initial_conn_params=(
-        "type" "wifi"
-        "con-name" "$connection_name"
-        "ifname" "$INTERFACE"
-        "ssid" "$ssid"
-        "wifi-sec.key-mgmt" "wpa-psk"
-        "wifi-sec.psk" "$password"
-        "ipv4.method" "auto"
-        "ipv6.method" "auto"
-    )
+    # IMPROVED: Try multiple connection methods for reliability
+    local connection_success=false
     
-    # Add specific BSSID if we found one
+    # Method 1: Create connection profile (original method)
     if [[ -n "$target_bssid" ]]; then
-        initial_conn_params+=("wifi.bssid" "$target_bssid")
         log_msg "🎯 Targeting specific BSSID: $target_bssid (${best_signal}dBm)"
+        
+        if nmcli connection add \
+            type wifi \
+            con-name "$connection_name" \
+            ifname "$INTERFACE" \
+            ssid "$ssid" \
+            wifi-sec.key-mgmt wpa-psk \
+            wifi-sec.psk "$password" \
+            wifi.bssid "$target_bssid" \
+            ipv4.method auto \
+            ipv6.method auto >/dev/null 2>&1; then
+            
+            log_msg "✓ Created Wi-Fi connection with specific BSSID"
+            
+            # Ensure clean connection state
+            nmcli device disconnect "$INTERFACE" 2>/dev/null || true
+            sleep 3
+
+            # Attempt to connect
+            if timeout "$CONNECTION_TIMEOUT" nmcli connection up "$connection_name" >/dev/null 2>&1; then
+                connection_success=true
+            else
+                log_msg "⚠ Connection profile method failed, trying direct method"
+                nmcli connection delete "$connection_name" 2>/dev/null || true
+            fi
+        else
+            log_msg "⚠ Failed to create connection profile, trying direct method"
+        fi
     fi
-
-    if nmcli connection add "${initial_conn_params[@]}" >/dev/null 2>&1; then
-        log_msg "✓ Created Wi-Fi connection with roaming support"
-    else
-        log_msg "✗ Failed to create connection profile"
-        return 1
+    
+    # Method 2: Direct connection (fallback)
+    if [[ "$connection_success" != "true" ]]; then
+        log_msg "🔄 Trying direct device connection method"
+        
+        # Ensure interface is disconnected first
+        nmcli device disconnect "$INTERFACE" 2>/dev/null || true
+        sleep 2
+        
+        if timeout "$CONNECTION_TIMEOUT" nmcli device wifi connect "$ssid" password "$password" ifname "$INTERFACE" >/dev/null 2>&1; then
+            connection_success=true
+            log_msg "✓ Direct connection method succeeded"
+        else
+            log_msg "✗ Both connection methods failed"
+            return 1
+        fi
     fi
-
-    # Ensure clean connection state
-    nmcli device disconnect "$INTERFACE" 2>/dev/null || true
-    sleep 3
-
-    # Attempt to connect
-    if timeout "$CONNECTION_TIMEOUT" nmcli connection up "$connection_name" >/dev/null 2>&1; then
+    
+    if [[ "$connection_success" == "true" ]]; then
         log_msg "✓ Successfully connected to $ssid"
         
         # Update current BSSID
@@ -542,24 +523,31 @@ connect_to_wifi_with_roaming() {
         CURRENT_BSSID=$(get_current_bssid)
         log_msg "📍 Connected to BSSID: ${CURRENT_BSSID:-unknown}"
         
-        # Wait for IP assignment
+        # Wait for IP assignment with improved checking
         local wait_count=0
-        while [[ $wait_count -lt 10 ]]; do
+        local ip_assigned=false
+        while [[ $wait_count -lt 15 ]]; do
             local ip_addr
             ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
             if [[ -n "$ip_addr" ]]; then
                 log_msg "✓ IP address assigned: $ip_addr"
-                return 0
+                ip_assigned=true
+                break
             fi
             sleep 2
             wait_count=$((wait_count + 1))
         done
         
-        log_msg "⚠ Connected but no IP address assigned"
-        return 1
+        if [[ "$ip_assigned" != "true" ]]; then
+            log_msg "⚠ Connected but no IP address assigned, requesting DHCP"
+            sudo dhclient -r "$INTERFACE" 2>/dev/null || true
+            sleep 2
+            sudo dhclient "$INTERFACE" 2>/dev/null || true
+            sleep 3
+        fi
+        
+        return 0
     else
-        log_msg "✗ Failed to connect to $ssid"
-        nmcli connection delete "$connection_name" 2>/dev/null || true
         return 1
     fi
 }
@@ -605,20 +593,45 @@ manage_roaming() {
 
 # --- Enhanced Traffic Generation (preserving existing functionality) ---
 test_basic_connectivity() {
-    log_msg "Testing basic connectivity on $INTERFACE..."
+    log_msg "🧪 Testing connectivity on $INTERFACE..."
     local success_count=0
+    local test_count=0
     
+    # Enhanced connectivity testing with better error handling
     for url in "${TEST_URLS[@]}"; do
-        if curl --interface "$INTERFACE" --max-time "${CURL_TIMEOUT:-10}" -fsSL -o /dev/null "$url" 2>/dev/null; then
+        ((test_count++))
+        if timeout 15 curl --interface "$INTERFACE" --max-time 10 -fsSL -o /dev/null "$url" 2>/dev/null; then
             log_msg "✓ Connectivity test passed: $url"
-            success_count=$((success_count + 1))
+            ((success_count++))
         else
             log_msg "✗ Connectivity test failed: $url"
         fi
         sleep 1
     done
     
-    log_msg "Basic connectivity: $success_count/${#TEST_URLS[@]} tests passed"
+    # Additional basic tests
+    ((test_count++))
+    if timeout 10 ping -I "$INTERFACE" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then
+        log_msg "✓ Ping connectivity test passed"
+        ((success_count++))
+    else
+        log_msg "✗ Ping connectivity test failed"
+        
+        # Try to fix connectivity issues
+        log_msg "🔧 Attempting to fix connectivity..."
+        sudo dhclient -r "$INTERFACE" 2>/dev/null || true
+        sleep 2
+        sudo dhclient "$INTERFACE" 2>/dev/null || true
+        sleep 3
+        
+        # Test again after fix attempt
+        if timeout 10 ping -I "$INTERFACE" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then
+            log_msg "✓ Ping connectivity restored after DHCP refresh"
+            ((success_count++))
+        fi
+    fi
+    
+    log_msg "🎯 Connectivity: $success_count/$test_count tests passed"
     return $([[ $success_count -gt 0 ]] && echo 0 || echo 1)
 }
 
@@ -626,7 +639,7 @@ generate_ping_traffic() {
     log_msg "Generating ping traffic (${PING_COUNT} pings per target)..."
     
     for target in "${PING_TARGETS[@]}"; do
-        if ping -I "$INTERFACE" -c "$PING_COUNT" -i 0.5 "$target" >/dev/null 2>&1; then
+        if timeout 30 ping -I "$INTERFACE" -c "$PING_COUNT" -i 0.5 "$target" >/dev/null 2>&1; then
             log_msg "✓ Ping successful: $target"
         else
             log_msg "✗ Ping failed: $target"
@@ -645,8 +658,8 @@ generate_download_traffic() {
             local url="${DOWNLOAD_URLS[$((RANDOM % ${#DOWNLOAD_URLS[@]}))]}"
             local start_time=$(date +%s)
             
-            if curl --interface "$INTERFACE" \
-                   --max-time 180 \
+            if timeout 180 curl --interface "$INTERFACE" \
+                   --max-time 120 \
                    --range "0-$DL_SIZE" \
                    --silent \
                    --location \
@@ -680,7 +693,11 @@ generate_realistic_traffic() {
     log_msg "Starting realistic traffic generation (intensity: $TRAFFIC_INTENSITY)..."
     
     # Always do basic connectivity and traffic
-    test_basic_connectivity
+    if ! test_basic_connectivity; then
+        log_msg "⚠ Basic connectivity failed, skipping additional traffic"
+        return 1
+    fi
+    
     generate_ping_traffic
     
     # Schedule heavier traffic based on intervals
@@ -697,6 +714,7 @@ generate_realistic_traffic() {
     fi
     
     log_msg "✓ Realistic traffic generation cycle completed"
+    return 0
 }
 
 # --- Enhanced Main Loop with Roaming ---
@@ -737,6 +755,7 @@ main_loop() {
                 log_msg "✅ Successfully established Wi-Fi connection with roaming capabilities"
                 sleep 10
             else
+                log_msg "❌ Connection failed, will retry in $REFRESH_INTERVAL seconds"
                 sleep "${REFRESH_INTERVAL}"
                 continue
             fi
@@ -754,8 +773,9 @@ main_loop() {
             
             # Generate realistic traffic (every 30 seconds minimum)
             if [[ $((now - last_traffic_time)) -gt 30 ]]; then
-                generate_realistic_traffic
-                last_traffic_time=$now
+                if generate_realistic_traffic; then
+                    last_traffic_time=$now
+                fi
             fi
             
             # Display current connection info
