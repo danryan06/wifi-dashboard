@@ -60,6 +60,30 @@ log_msg() {
     fi
 }
 
+# Enhanced logging with network state
+log_msg_with_network_info() {
+    local msg="$1"
+    local timestamp="[$(date '+%F %T')]"
+    local ip_info=""
+    
+    # Add current IP info to critical messages
+    if [[ "$msg" =~ (Connected|Failed|IP|DHCP|Error) ]]; then
+        local current_ip=$(ip addr show "$INTERFACE" 2>/dev/null | grep 'inet ' | awk '{print $2}' | head -n1 || echo "none")
+        ip_info=" [IP:${current_ip}]"
+    fi
+    
+    local full_msg="$timestamp WIFI-GOOD: $msg$ip_info"
+    
+    if declare -F log_msg_with_rotation >/dev/null; then
+        echo "$full_msg"
+        log_msg_with_rotation "$LOG_FILE" "$full_msg" "WIFI-GOOD"
+    else
+        rotate_basic
+        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+        echo "$full_msg" | tee -a "$LOG_FILE"
+    fi
+}
+
 # --- Load settings and overrides ---
 [[ -f "$SETTINGS" ]] && source "$SETTINGS" || true
 
@@ -175,6 +199,61 @@ check_wifi_interface() {
     log_msg "Interface $INTERFACE state: $state"
 
     return 0
+}
+
+# Enhanced interface state verification
+verify_interface_health() {
+    local interface="$1"
+    local expected_ssid="$2"
+    
+    log_msg "🔍 Verifying interface health for $interface..."
+    
+    # Check 1: Interface exists and is up
+    if ! ip link show "$interface" >/dev/null 2>&1; then
+        log_msg "❌ Interface $interface not found"
+        return 1
+    fi
+    
+    if ! ip link show "$interface" | grep -q "state UP"; then
+        log_msg "⚠️ Interface $interface is down, bringing up..."
+        sudo ip link set "$interface" up || return 1
+        sleep 2
+    fi
+    
+    # Check 2: NetworkManager management
+    if ! nmcli device show "$interface" >/dev/null 2>&1; then
+        log_msg "⚠️ Interface $interface not managed by NetworkManager"
+        sudo nmcli device set "$interface" managed yes || true
+        sleep 3
+    fi
+    
+    # Check 3: Connection state
+    local nm_state=$(nmcli -t -f GENERAL.STATE device show "$interface" 2>/dev/null | cut -d: -f2 | awk '{print $1}' || echo "unknown")
+    local ip_addr=$(ip addr show "$interface" | grep 'inet ' | awk '{print $2}' | head -n1)
+    local current_ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | grep '^yes' | cut -d':' -f2 || echo "")
+    
+    log_msg "📊 Interface Status:"
+    log_msg "   - NetworkManager State: $nm_state"
+    log_msg "   - IP Address: ${ip_addr:-none}"
+    log_msg "   - Current SSID: ${current_ssid:-none}"
+    log_msg "   - Expected SSID: ${expected_ssid:-any}"
+    
+    # Health assessment
+    if [[ "$nm_state" == "100" && -n "$ip_addr" ]]; then
+        if [[ -n "$expected_ssid" && "$current_ssid" == "$expected_ssid" ]]; then
+            log_msg "✅ Interface $interface is healthy"
+            return 0
+        elif [[ -z "$expected_ssid" ]]; then
+            log_msg "✅ Interface $interface is connected (SSID check skipped)"
+            return 0
+        else
+            log_msg "⚠️ Interface $interface connected to wrong SSID"
+            return 2  # Connected but wrong SSID
+        fi
+    else
+        log_msg "⚠️ Interface $interface has connectivity issues"
+        return 1
+    fi
 }
 
 freqs_for_band() {
@@ -505,28 +584,99 @@ connect_to_wifi_with_roaming() {
         CURRENT_BSSID=$(get_current_bssid)
         log_msg "📍 Connected to BSSID: ${CURRENT_BSSID:-unknown}"
         
-        # Wait for IP assignment with improved checking
+        # Wait for IP assignment with improved checking and NetworkManager integration
         local wait_count=0
         local ip_assigned=false
-        while [[ $wait_count -lt 15 ]]; do
+        log_msg "⏳ Waiting for IP address assignment..."
+        
+        while [[ $wait_count -lt 20 ]]; do  # Increased from 15 to 20
             local ip_addr
             ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
             if [[ -n "$ip_addr" ]]; then
-                log_msg "✓ IP address assigned: $ip_addr"
+                log_msg "✅ IP address assigned: $ip_addr"
                 ip_assigned=true
                 break
             fi
+            
+            # Enhanced progress reporting
+            if [[ $((wait_count % 5)) -eq 0 && $wait_count -gt 0 ]]; then
+                log_msg "⏳ Still waiting for IP assignment... (${wait_count}s/40s)"
+                
+                # Check if NetworkManager shows connected but no IP
+                local nm_state=$(nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}' || echo "unknown")
+                if [[ "$nm_state" == "100" ]]; then
+                    log_msg "🔧 NetworkManager shows connected but no IP, requesting renewal..."
+                    # Use NetworkManager's built-in DHCP renewal instead of direct dhclient
+                    nmcli device reapply "$INTERFACE" 2>/dev/null || true
+                    sleep 3
+                fi
+            fi
+            
             sleep 2
-            wait_count=$((wait_count + 1))
+            wait_count=$((wait_count + 2))
         done
         
         if [[ "$ip_assigned" != "true" ]]; then
-            log_msg "⚠ Connected but no IP address assigned, requesting DHCP"
-            sudo dhclient -r "$INTERFACE" 2>/dev/null || true
-            sleep 2
-            sudo dhclient "$INTERFACE" 2>/dev/null || true
-            sleep 3
-        fi
+            log_msg "⚠️ Connected but no IP address assigned after 40s, attempting recovery..."
+            
+            # FIXED: Use NetworkManager for DHCP instead of direct dhclient calls
+            # This prevents conflicts with NetworkManager's DHCP management
+            log_msg "🔄 Attempting NetworkManager DHCP renewal..."
+            
+            # Method 1: NetworkManager connection restart
+            local active_conn=$(nmcli -t -f NAME,DEVICE connection show --active | grep ":$INTERFACE$" | cut -d: -f1)
+            if [[ -n "$active_conn" ]]; then
+                log_msg "🔄 Restarting connection: $active_conn"
+                nmcli connection down "$active_conn" 2>/dev/null || true
+                sleep 2
+                nmcli connection up "$active_conn" 2>/dev/null || true
+                sleep 5
+                
+                # Check if IP was assigned after restart
+                ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
+                if [[ -n "$ip_addr" ]]; then
+                    log_msg "✅ IP address assigned after connection restart: $ip_addr"
+                    ip_assigned=true
+                fi
+            fi
+            
+            # Method 2: Device reapply (fallback)
+            if [[ "$ip_assigned" != "true" ]]; then
+                log_msg "🔄 Attempting device reapply..."
+                nmcli device reapply "$INTERFACE" 2>/dev/null || true
+                sleep 5
+                
+                ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
+                if [[ -n "$ip_addr" ]]; then
+                    log_msg "✅ IP address assigned after device reapply: $ip_addr"
+                    ip_assigned=true
+                fi
+            fi
+            
+            # Method 3: Last resort - direct dhclient but with NetworkManager awareness
+            if [[ "$ip_assigned" != "true" ]]; then
+                log_msg "🆘 Last resort: direct DHCP request (may cause NetworkManager conflicts)"
+                # First check if NetworkManager is managing DHCP
+                if ! nmcli device show "$INTERFACE" | grep -q "IP4.METHOD.*auto"; then
+                    sudo dhclient -r "$INTERFACE" 2>/dev/null || true
+                    sleep 2
+                    sudo dhclient "$INTERFACE" 2>/dev/null || true
+                    sleep 5
+                    
+                    ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
+                    if [[ -n "$ip_addr" ]]; then
+                        log_msg "✅ IP address assigned via direct DHCP: $ip_addr"
+                        ip_assigned=true
+                    fi
+                else
+                    log_msg "⚠️ NetworkManager is managing DHCP - skipping direct dhclient to avoid conflicts"
+                fi
+            fi
+            
+            if [[ "$ip_assigned" != "true" ]]; then
+                log_msg "❌ Failed to obtain IP address after all recovery attempts"
+                return 1
+            fi
         
         return 0
     else
@@ -601,17 +751,56 @@ test_basic_connectivity() {
         
         # Try to fix connectivity issues
         log_msg "🔧 Attempting to fix connectivity..."
-        sudo dhclient -r "$INTERFACE" 2>/dev/null || true
-        sleep 2
-        sudo dhclient "$INTERFACE" 2>/dev/null || true
-        sleep 3
         
-        # Test again after fix attempt
-        if timeout 10 ping -I "$INTERFACE" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then
-            log_msg "✓ Ping connectivity restored after DHCP refresh"
-            ((success_count++))
+        # FIXED: Use NetworkManager-based recovery instead of direct dhclient
+        log_msg "🔄 Using NetworkManager for connectivity recovery..."
+        
+        # Check current connection state
+        local nm_state=$(nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}' || echo "unknown")
+        local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
+        
+        if [[ "$nm_state" == "100" && -n "$ip_addr" ]]; then
+            # Connected with IP but ping failing - likely routing/DNS issue
+            log_msg "🔍 Have IP ($ip_addr) but ping failing - checking routing..."
+            
+            # Check if we have a default route through this interface
+            if ! ip route | grep -q "default.*dev $INTERFACE"; then
+                log_msg "⚠️ No default route via $INTERFACE, this is expected (eth0 likely default)"
+                # For Wi-Fi interfaces that aren't the default route, test with source IP
+                if timeout 10 ping -I "$ip_addr" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then
+                    log_msg "✅ Ping successful using source IP"
+                    ((success_count++))
+                fi
+            else
+                # Try DNS flush and route refresh
+                log_msg "🔄 Refreshing network configuration..."
+                nmcli device reapply "$INTERFACE" 2>/dev/null || true
+                sleep 3
+                
+                if timeout 10 ping -I "$INTERFACE" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then
+                    log_msg "✅ Ping connectivity restored after network refresh"
+                    ((success_count++))
+                fi
+            fi
+        else
+            # No IP or not connected - need to reestablish connection
+            log_msg "🔄 No IP or not connected, attempting connection recovery..."
+            
+            # Use NetworkManager to refresh the connection
+            local active_conn=$(nmcli -t -f NAME,DEVICE connection show --active | grep ":$INTERFACE$" | cut -d: -f1)
+            if [[ -n "$active_conn" ]]; then
+                nmcli connection down "$active_conn" 2>/dev/null || true
+                sleep 2
+                nmcli connection up "$active_conn" 2>/dev/null || true
+                sleep 5
+                
+                # Test again after recovery
+                if timeout 10 ping -I "$INTERFACE" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then
+                    log_msg "✅ Ping connectivity restored after connection recovery"
+                    ((success_count++))
+                fi
+            fi
         fi
-    fi
     
     log_msg "🎯 Connectivity: $success_count/$test_count tests passed"
     return $([[ $success_count -gt 0 ]] && echo 0 || echo 1)
@@ -727,29 +916,63 @@ main_loop() {
             continue
         fi
 
-        # Check connection status
+        # Enhanced connection status checking
         local state
         state="$(nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}' || echo "unknown")"
-        
-        if [[ "$state" != "100" ]]; then
-            log_msg "Not connected to target SSID, attempting connection..."
-            if connect_to_wifi_with_roaming "$SSID" "$PASSWORD"; then
-                log_msg "✅ Successfully established Wi-Fi connection with roaming capabilities"
-                sleep 10
-            else
-                log_msg "❌ Connection failed, will retry in $REFRESH_INTERVAL seconds"
-                sleep "${REFRESH_INTERVAL}"
-                continue
-            fi
-        fi
-
-        # Verify we're connected to the right SSID
+        local ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
         local current_ssid
         current_ssid="$(nmcli -t -f active,ssid dev wifi 2>/dev/null | grep '^yes' | cut -d':' -f2 || echo "")"
         
-        if [[ "$current_ssid" == "$SSID" ]]; then
-            log_msg "✓ Connected to target SSID: $SSID"
+        # Enhanced connection state logic
+        local connection_healthy=false
+        
+        if [[ "$state" == "100" && -n "$ip_addr" && "$current_ssid" == "$SSID" ]]; then
+            # All conditions met - connection appears healthy
+            connection_healthy=true
+            log_msg "✅ Connection healthy: SSID=$SSID, IP=$ip_addr"
+        else
+            log_msg "⚠️ Connection issue detected:"
+            log_msg "   - NetworkManager State: $state (100=connected)"
+            log_msg "   - IP Address: ${ip_addr:-none}"
+            log_msg "   - Current SSID: ${current_ssid:-none}"
+            log_msg "   - Expected SSID: $SSID"
             
+            # Determine what needs fixing
+            if [[ "$state" != "100" ]]; then
+                log_msg "🔧 NetworkManager shows not connected, attempting reconnection..."
+                if connect_to_wifi_with_roaming "$SSID" "$PASSWORD"; then
+                    log_msg "✅ Successfully re-established Wi-Fi connection"
+                    sleep 10
+                    continue
+                else
+                    log_msg "❌ Reconnection failed, will retry in $REFRESH_INTERVAL seconds"
+                    sleep "${REFRESH_INTERVAL}"
+                    continue
+                fi
+            elif [[ -z "$ip_addr" ]]; then
+                log_msg "🔧 Connected but no IP address, attempting IP recovery..."
+                # Use the enhanced IP recovery from Fix 1
+                nmcli device reapply "$INTERFACE" 2>/dev/null || true
+                sleep 5
+                
+                # Check if IP was recovered
+                ip_addr=$(ip addr show "$INTERFACE" | grep 'inet ' | awk '{print $2}' | head -n1)
+                if [[ -n "$ip_addr" ]]; then
+                    log_msg "✅ IP address recovered: $ip_addr"
+                    connection_healthy=true
+                fi
+            elif [[ "$current_ssid" != "$SSID" ]]; then
+                log_msg "🔧 Connected to wrong SSID, reconnecting..."
+                if connect_to_wifi_with_roaming "$SSID" "$PASSWORD"; then
+                    log_msg "✅ Successfully connected to correct SSID"
+                    sleep 10
+                    continue
+                fi
+            fi
+        fi
+        
+        # Only proceed with normal operations if connection is healthy
+        if [[ "$connection_healthy" == "true" ]]; then
             # Manage roaming opportunities
             manage_roaming
             
@@ -764,12 +987,10 @@ main_loop() {
             CURRENT_BSSID=$(get_current_bssid)
             if [[ -n "$CURRENT_BSSID" ]]; then
                 local signal="${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown}"
-                log_msg "📍 Current: BSSID $CURRENT_BSSID (${signal}dBm) | Available BSSIDs: ${#DISCOVERED_BSSIDS[@]}"
+                log_msg "📡 Current: BSSID $CURRENT_BSSID (${signal}dBm) | Available BSSIDs: ${#DISCOVERED_BSSIDS[@]}"
             fi
             
             log_msg "✅ Good Wi-Fi client with roaming operating normally"
-        else
-            log_msg "⚠ Connected to wrong SSID: '$current_ssid', expected: '$SSID'"
         fi
 
         sleep "${REFRESH_INTERVAL}"

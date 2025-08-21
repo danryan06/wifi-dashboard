@@ -5,7 +5,7 @@ set -euo pipefail
 # Downloads and installs complete dashboard system from GitHub
 # Usage: curl -sSL https://raw.githubusercontent.com/danryan06/wifi-dashboard/main/install.sh | sudo bash
 
-VERSION="v5.0.1"
+VERSION="v5.0.2"
 REPO_URL="https://raw.githubusercontent.com/danryan06/wifi-dashboard/main"
 INSTALL_DIR="/tmp/wifi-dashboard-install"
 
@@ -150,202 +150,193 @@ detect_network_interfaces() {
     fi
 }
 
-apply_nm_wifi_defaults() {
-    log_step "Applying Wi-Fi regulatory domain and NetworkManager defaults..."
+# FIXED: Comprehensive network manager setup with proper conflict resolution
+setup_network_manager() {
+    log_step "Setting up NetworkManager as primary network manager..."
 
-    # Persist kernel regulatory domain (helps brcmfmac/phy0 on Pi 3)
+    # Stop and disable conflicting services first
+    log_info "Disabling conflicting network services..."
+    
+    # Disable dhcpcd (common on Raspbian)
+    if systemctl is-enabled dhcpcd >/dev/null 2>&1; then
+        systemctl disable dhcpcd
+        systemctl stop dhcpcd
+        log_info "Disabled dhcpcd"
+    fi
+    
+    # Disable wpa_supplicant service (NetworkManager will manage it)
+    if systemctl is-enabled wpa_supplicant >/dev/null 2>&1; then
+        systemctl disable wpa_supplicant
+        systemctl stop wpa_supplicant || true
+        log_info "Disabled standalone wpa_supplicant"
+    fi
+    
+    # Kill any running wpa_supplicant processes
+    pkill -f "wpa_supplicant" || true
+    
+    # Install NetworkManager if not present
+    if ! command -v nmcli >/dev/null 2>&1; then
+        log_info "Installing NetworkManager..."
+        apt-get update
+        apt-get install -y network-manager
+    fi
+    
+    # Enable and start NetworkManager
+    systemctl enable NetworkManager
+    systemctl start NetworkManager
+    
+    # Wait for NetworkManager to initialize
+    sleep 5
+    
+    log_info "✓ NetworkManager is now the primary network manager"
+}
+
+# FIXED: Better Wi-Fi configuration with proper dependencies
+configure_wifi_settings() {
+    log_step "Configuring Wi-Fi settings for Mist PoC environment..."
+
+    # Set regulatory domain in multiple places for reliability
+    log_info "Setting Wi-Fi regulatory domain to US..."
+    
+    # Kernel command line (persistent across reboots)
     if ! grep -q 'cfg80211.ieee80211_regdom=US' /boot/cmdline.txt 2>/dev/null; then
         sed -i 's/$/ cfg80211.ieee80211_regdom=US/' /boot/cmdline.txt
-        log_info "Appended cfg80211.ieee80211_regdom=US to /boot/cmdline.txt"
-    else
-        log_info "Regdom kernel arg already present"
+        log_info "Added regulatory domain to kernel cmdline"
     fi
-
-    # Ensure wpa_supplicant sets country (applies at bringup)
-    if [[ -f /etc/wpa_supplicant/wpa_supplicant.conf ]]; then
-        sed -i '1s/^/country=US\n/;t;1i country=US' /etc/wpa_supplicant/wpa_supplicant.conf
-        log_info "Ensured country=US in wpa_supplicant.conf"
-    fi
-
-    # Disable scan MAC randomization (stabilizes DHCP + Mist analytics)
+    
+    # Runtime setting
+    iw reg set US 2>/dev/null || true
+    
+    # Create comprehensive NetworkManager configuration
     mkdir -p /etc/NetworkManager/conf.d
-    printf "[device]\nwifi.scan-rand-mac-address=no\n" > /etc/NetworkManager/conf.d/10-scan-mac.conf
-    log_info "Wrote /etc/NetworkManager/conf.d/10-scan-mac.conf"
+    
+    # Main NetworkManager configuration for Wi-Fi dashboard
+    cat > /etc/NetworkManager/conf.d/99-wifi-dashboard.conf << 'EOF'
+[main]
+# Ensure NetworkManager manages all devices
+no-auto-default=*
+plugins=ifupdown,keyfile
 
-    # Restart NM and ensure it manages wlan* devices
-    systemctl restart NetworkManager || true
-    nmcli device set wlan0 managed yes 2>/dev/null || true
-    nmcli device set wlan1 managed yes 2>/dev/null || true
-    log_info "NetworkManager restarted; wlan0/wlan1 set managed (if present)"
-}
+[device]
+# Disable MAC randomization for stable DHCP/analytics
+wifi.scan-rand-mac-address=no
+wifi.cloned-mac-address=preserve
 
-harden_systemd_units() {
-    log_step "Hardening Wi-Fi service unit files (restart backoff + NM ordering)..."
-    for u in wifi-good.service wifi-bad.service; do
-        unit="/etc/systemd/system/$u"
-        [[ -f "$unit" ]] || continue
+[connection]
+# Optimize for demo environment
+ipv6.method=ignore
+connection.autoconnect-retries=5
+connection.autoconnect-priority=10
 
-        # Ensure Wants/After on NetworkManager and restart backoff
-        grep -q '^Wants=NetworkManager.service' "$unit" || \
-          sed -i '/^\[Unit\]/a Wants=NetworkManager.service' "$unit"
-        grep -q '^After=NetworkManager.service' "$unit" || \
-          sed -i '/^\[Unit\]/a After=NetworkManager.service network-online.target' "$unit"
-        grep -q '^StartLimitIntervalSec=' "$unit" || \
-          sed -i '/^\[Unit\]/a StartLimitIntervalSec=300\nStartLimitBurst=3' "$unit"
+# Faster DHCP timeouts for demo
+ipv4.dhcp-timeout=30
+ipv4.may-fail=false
 
-        grep -q '^Restart=' "$unit" || \
-          sed -i '/^\[Service\]/a Restart=on-failure' "$unit"
-        grep -q '^RestartSec=' "$unit" || \
-          sed -i '/^\[Service\]/a RestartSec=20' "$unit"
+[logging]
+level=INFO
+domains=WIFI:INFO,DHCP:INFO,DEVICE:INFO
+EOF
+
+    # Disable MAC randomization specifically (important for Mist analytics)
+    cat > /etc/NetworkManager/conf.d/10-wifi-stable-mac.conf << 'EOF'
+[device]
+wifi.scan-rand-mac-address=no
+
+[connection]
+wifi.cloned-mac-address=preserve
+ethernet.cloned-mac-address=preserve
+EOF
+
+    # Restart NetworkManager with new configuration
+    systemctl restart NetworkManager
+    
+    # Wait for restart and ensure interfaces are managed
+    sleep 8
+    
+    # Ensure all Wi-Fi interfaces are managed by NetworkManager
+    for iface in $(ip link show | grep -o "wlan[0-9]" || true); do
+        nmcli device set "$iface" managed yes 2>/dev/null || true
+        log_info "Set $iface managed by NetworkManager"
     done
-    systemctl daemon-reload
+    
+    log_info "✓ Wi-Fi settings optimized for Mist PoC environment"
 }
 
-# Create auto-interface assignment if script is missing
-create_auto_interface_assignment() {
-    log_step "Creating auto-interface assignment functionality..."
+# FIXED: Interface assignment that happens BEFORE service creation
+assign_interfaces_early() {
+    log_step "Performing early interface assignment (before service creation)..."
     
-    local script_file="$PI_HOME/wifi_test_dashboard/scripts/install/04.5-auto-interface-assignment.sh"
+    # Create configs directory early
+    mkdir -p "$PI_HOME/wifi_test_dashboard/configs"
     
-    # Create the directory if it doesn't exist
-    mkdir -p "$(dirname "$script_file")"
+    # Get list of all Wi-Fi interfaces
+    wifi_interfaces=($(ip link show | grep -E "wlan[0-9]" | cut -d: -f2 | tr -d ' ' || true))
     
-    # Create the auto-interface assignment script locally
-    cat > "$script_file" << 'AUTO_SCRIPT_EOF'
-
-#!/usr/bin/env bash
-# Auto-generated interface assignment script
-
-set -euo pipefail
-
-log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
-log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
-
-log_info "Auto-detecting and assigning network interfaces..."
-
-# Get list of all Wi-Fi interfaces
-wifi_interfaces=($(ip link show | grep -E "wlan[0-9]" | cut -d: -f2 | tr -d ' ' || true))
-
-log_info "Detected Wi-Fi interfaces: ${wifi_interfaces[*]:-none}"
-
-# Default assignments
-good_client_iface="wlan0"
-bad_client_iface="wlan1"
-
-# Check if we have interfaces available
-if [[ ${#wifi_interfaces[@]} -gt 0 ]]; then
-    good_client_iface="${wifi_interfaces[0]}"
-    log_info "Assigned good client to: $good_client_iface"
-fi
-
-if [[ ${#wifi_interfaces[@]} -gt 1 ]]; then
-    bad_client_iface="${wifi_interfaces[1]}"
-    log_info "Assigned bad client to: $bad_client_iface"
-else
-    log_warn "Only one Wi-Fi interface available - bad client disabled"
-    bad_client_iface=""
-fi
-
-# Detect if built-in adapter is dual-band capable
-capabilities="unknown"
-if [[ "$good_client_iface" == "wlan0" ]]; then
-    # Check if this is a Pi with dual-band built-in adapter
-    if grep -q "Raspberry Pi 4\|Raspberry Pi 3 Model B Plus\|Raspberry Pi Zero 2" /proc/cpuinfo 2>/dev/null; then
-        capabilities="builtin_dualband"
-    else
-        capabilities="builtin"
+    log_info "Detected Wi-Fi interfaces: ${wifi_interfaces[*]:-none}"
+    
+    # Smart interface assignment
+    local good_client_iface="wlan0"
+    local bad_client_iface=""
+    local capabilities="builtin"
+    
+    # Assign good client interface
+    if [[ ${#wifi_interfaces[@]} -gt 0 ]]; then
+        good_client_iface="${wifi_interfaces[0]}"
+        
+        # Detect capabilities
+        if [[ "$good_client_iface" == "wlan0" ]]; then
+            if grep -qE "Raspberry Pi (4|3 Model B Plus|Zero 2)" /proc/cpuinfo 2>/dev/null; then
+                capabilities="builtin_dualband"
+            else
+                capabilities="builtin"
+            fi
+        else
+            capabilities="usb"
+        fi
+        
+        log_info "Assigned good client to: $good_client_iface ($capabilities)"
     fi
-fi
-
-# Create interface assignment file
-cat > "$PI_HOME/wifi_test_dashboard/configs/interface-assignments.conf" << EOF
-# Auto-generated interface assignments
+    
+    # Assign bad client interface (if available)
+    if [[ ${#wifi_interfaces[@]} -gt 1 ]]; then
+        bad_client_iface="${wifi_interfaces[1]}"
+        log_info "Assigned bad client to: $bad_client_iface"
+    else
+        log_warn "Only one Wi-Fi interface - bad client will be disabled"
+    fi
+    
+    # Create early interface assignment file
+    cat > "$PI_HOME/wifi_test_dashboard/configs/interface-assignments.conf" << EOF
+# Auto-generated interface assignments (Early Assignment)
 # Generated: $(date)
 
 WIFI_GOOD_INTERFACE=$good_client_iface
 WIFI_GOOD_INTERFACE_TYPE=$capabilities
 WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood
-WIFI_GOOD_TRAFFIC_INTENSITY=medium
 
-WIFI_BAD_INTERFACE=${bad_client_iface:-none}
-WIFI_BAD_INTERFACE_TYPE=usb
+WIFI_BAD_INTERFACE=${bad_client_iface:-disabled}
+WIFI_BAD_INTERFACE_TYPE=${bad_client_iface:+usb}
 WIFI_BAD_HOSTNAME=CNXNMist-WiFiBad
-WIFI_BAD_TRAFFIC_INTENSITY=light
 
 WIRED_INTERFACE=eth0
 WIRED_HOSTNAME=CNXNMist-Wired
-WIRED_TRAFFIC_INTENSITY=heavy
+
+# Export for use by installation scripts
+export WIFI_GOOD_INTERFACE WIFI_BAD_INTERFACE
 EOF
 
-# Update (or insert) INTERFACE="…" in a script, safely under set -e
-patch_iface_var() {
-  local file="$1" iface="$2"
-  [[ -f "$file" ]] || return 0
-
-  # If an uncommented INTERFACE= line exists, replace the whole assignment,
-  # preserving a leading 'export ' if present.
-  if grep -Eq '^[[:space:]]*(export[[:space:]]+)?INTERFACE=' "$file"; then
-    sed -i -E 's|^[[:space:]]*(export[[:space:]]+)?INTERFACE=.*$|\1INTERFACE="'"$iface"'"|' "$file"
-  else
-    # Otherwise append a clean assignment at the end.
-    printf '\nINTERFACE="%s"\n' "$iface" >> "$file"
-  fi
-}
-
-# Good client
-patch_iface_var "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh" "$good_client_iface"
-patch_iface_var "$PI_HOME/wifi_test_dashboard/scripts/traffic/connect_and_curl.sh" "$good_client_iface"
-
-# Bad client (only if assigned)
-if [[ -n "${bad_client_iface:-}" ]]; then
-  patch_iface_var "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh" "$bad_client_iface"
-  patch_iface_var "$PI_HOME/wifi_test_dashboard/scripts/traffic/fail_auth_loop.sh" "$bad_client_iface"
-fi
-
-
-# Create summary document
-cat > "$PI_HOME/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md" << EOF
-# Interface Assignment Summary
-
-**Generated:** $(date)
-
-## Assignments
-- **Good Wi-Fi Client:** $good_client_iface ($capabilities)
-- **Bad Wi-Fi Client:** ${bad_client_iface:-disabled}
-- **Wired Client:** eth0
-
-## Detected Hardware
-$(ip link show | grep -E "(eth|wlan)" | head -5)
-
-## Notes
-- Interface assignments are based on detected hardware
-- Built-in adapters are preferred for good clients
-- USB adapters are used for bad clients when available
-EOF
-
-chown -R "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/configs/"
-chown "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md"
-
-log_info "✓ Auto-interface assignment completed"
-AUTO_SCRIPT_EOF
-
-    chmod +x "$script_file"
-    chown "$PI_USER:$PI_USER" "$script_file"
+    # Make the assignments available to subsequent scripts
+    source "$PI_HOME/wifi_test_dashboard/configs/interface-assignments.conf"
     
-    log_info "✓ Created auto-interface assignment script"
+    chown -R "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/configs/"
     
-    # Execute the script
-    if bash "$script_file"; then
-        log_success "✓ Auto-interface assignment completed"
-    else
-        log_warn "⚠ Auto-interface assignment had issues but continuing..."
-    fi
+    log_info "✓ Early interface assignment completed"
 }
 
 main_installation() {
     log_step "Starting main installation process..."
     
-    # Installation steps in order
+    # FIXED: Reordered installation steps with better dependencies
     local install_steps=(
         "scripts/install/01-dependencies.sh:Installing system dependencies"
         "scripts/install/02-cleanup.sh:Cleaning up previous installations"  
@@ -358,7 +349,7 @@ main_installation() {
     )
     
     local step_num=1
-    local total_steps=$((${#install_steps[@]} + 1)) # +1 for auto-interface step
+    local total_steps=${#install_steps[@]}
     
     for step in "${install_steps[@]}"; do
         local script_path="${step%:*}"
@@ -376,12 +367,55 @@ main_installation() {
         
         ((step_num++))
     done
+}
+
+# FIXED: Service hardening with proper network dependencies
+harden_services() {
+    log_step "Hardening services with proper network dependencies..."
     
-    # Add auto-interface assignment as a separate step
-    echo
-    log_step "[$step_num/$total_steps] Auto-detecting and assigning interfaces"
-    create_auto_interface_assignment
-    log_success "Step $step_num completed successfully"
+    local services=("wifi-dashboard.service" "wired-test.service" "wifi-good.service" "wifi-bad.service")
+    
+    for service in "${services[@]}"; do
+        local unit_file="/etc/systemd/system/$service"
+        [[ -f "$unit_file" ]] || continue
+        
+        log_info "Hardening $service..."
+        
+        # Ensure proper network dependencies
+        if ! grep -q "After=NetworkManager.service" "$unit_file"; then
+            sed -i '/^\[Unit\]/a After=NetworkManager.service network-online.target' "$unit_file"
+        fi
+        
+        if ! grep -q "Wants=NetworkManager.service" "$unit_file"; then
+            sed -i '/^\[Unit\]/a Wants=NetworkManager.service' "$unit_file"
+        fi
+        
+        # Add restart policies
+        if ! grep -q "Restart=on-failure" "$unit_file"; then
+            sed -i '/^\[Service\]/a Restart=on-failure' "$unit_file"
+            sed -i '/^\[Service\]/a RestartSec=15' "$unit_file"
+        fi
+        
+        # Add rate limiting
+        if ! grep -q "StartLimitIntervalSec=" "$unit_file"; then
+            sed -i '/^\[Unit\]/a StartLimitIntervalSec=300' "$unit_file"
+            sed -i '/^\[Unit\]/a StartLimitBurst=3' "$unit_file"
+        fi
+    done
+    
+    # FIXED: Remove any legacy traffic services that conflict
+    local legacy_services=("traffic-eth0.service" "traffic-wlan0.service" "traffic-wlan1.service")
+    
+    for legacy in "${legacy_services[@]}"; do
+        if systemctl list-unit-files | grep -q "^${legacy}"; then
+            log_info "Removing legacy service: $legacy"
+            systemctl disable --now "$legacy" 2>/dev/null || true
+            rm -f "/etc/systemd/system/$legacy"
+        fi
+    done
+    
+    systemctl daemon-reload
+    log_info "✓ Services hardened with proper dependencies"
 }
 
 verify_installation() {
@@ -392,6 +426,7 @@ verify_installation() {
         "Flask application:/home/$PI_USER/wifi_test_dashboard/app.py"
         "Dashboard service:/etc/systemd/system/wifi-dashboard.service"
         "Configuration files:/home/$PI_USER/wifi_test_dashboard/configs"
+        "Interface assignments:/home/$PI_USER/wifi_test_dashboard/configs/interface-assignments.conf"
     )
     
     local failed_checks=0
@@ -408,11 +443,18 @@ verify_installation() {
         fi
     done
     
+    # Check if NetworkManager is managing interfaces
+    if nmcli device status | grep -q "wlan0.*connected\|wlan0.*disconnected"; then
+        log_info "✓ NetworkManager managing Wi-Fi interfaces"
+    else
+        log_warn "⚠ NetworkManager may not be managing Wi-Fi properly"
+    fi
+    
     # Check if dashboard service is running
     if systemctl is-active --quiet wifi-dashboard.service; then
         log_info "✓ Dashboard service: Running"
     else
-        log_warn "⚠ Dashboard service: Not running (may need manual start)"
+        log_warn "⚠ Dashboard service: Not running (will be started after configuration)"
     fi
     
     if [[ $failed_checks -eq 0 ]]; then
@@ -424,13 +466,6 @@ verify_installation() {
     fi
 }
 
-# after enabling wifi-good/wifi-bad/etc, make sure wlan0 traffic unit is gone
-if systemctl list-unit-files | grep -q '^traffic-wlan0\.service'; then
-  systemctl disable --now traffic-wlan0.service || true
-  rm -f /etc/systemd/system/traffic-wlan0.service
-  systemctl daemon-reload
-fi
-
 cleanup_installation() {
     log_step "Cleaning up installation files..."
     rm -rf "$INSTALL_DIR"
@@ -441,20 +476,20 @@ print_success_message() {
     local pi_ip
     pi_ip=$(hostname -I | awk '{print $1}' 2>/dev/null || echo "IP_NOT_FOUND")
     
-    # Read interface assignments if available
+    # Read interface assignments
     local good_iface="wlan0"
-    local bad_iface="wlan1"
+    local bad_iface="disabled"
     local interface_summary=""
     
     if [[ -f "/home/$PI_USER/wifi_test_dashboard/configs/interface-assignments.conf" ]]; then
         source "/home/$PI_USER/wifi_test_dashboard/configs/interface-assignments.conf" 2>/dev/null || true
         good_iface="$WIFI_GOOD_INTERFACE"
-        bad_iface="${WIFI_BAD_INTERFACE:-none}"
+        bad_iface="${WIFI_BAD_INTERFACE:-disabled}"
         
         interface_summary="
 🎯 INTELLIGENT INTERFACE ASSIGNMENT:
   • Good Wi-Fi Client: $good_iface ($WIFI_GOOD_INTERFACE_TYPE)
-  • Bad Wi-Fi Client:  ${bad_iface} (${WIFI_BAD_INTERFACE_TYPE:-disabled})
+  • Bad Wi-Fi Client:  $bad_iface
   • Wired Client:      eth0 (ethernet)
   • Hostname Pattern:  $WIFI_GOOD_HOSTNAME / $WIFI_BAD_HOSTNAME"
     fi
@@ -476,34 +511,25 @@ print_success_message() {
         echo -e "${GREEN}$interface_summary${NC}"
         echo
     fi
-    log_success "🚦 FEATURES INSTALLED:"
-    log_success "  ✅ Intelligent interface detection and assignment"
-    log_success "  ✅ Web-based dashboard with real-time monitoring"
-    log_success "  ✅ Speedtest CLI integration for bandwidth testing"
-    log_success "  ✅ YouTube traffic simulation capabilities"
-    log_success "  ✅ Interface-specific traffic generation"
-    log_success "  ✅ Wi-Fi client simulation (good and bad authentication)"
-    log_success "  ✅ Network emulation tools (netem)"
-    log_success "  ✅ Comprehensive logging and monitoring"
+    log_success "🚦 NETWORK IMPROVEMENTS:"
+    log_success "  ✅ NetworkManager is the primary network manager"
+    log_success "  ✅ Eliminated dhcpcd/wpa_supplicant conflicts"
+    log_success "  ✅ Early interface assignment prevents race conditions"
+    log_success "  ✅ Proper service dependencies and restart policies"
+    log_success "  ✅ Legacy service cleanup completed"
     echo
     log_success "🔧 NEXT STEPS:"
     log_success "  1. Open http://$pi_ip:5000 in your web browser"
     log_success "  2. Configure your SSID and password in the Wi-Fi Config tab"
-    log_success "  3. Visit the Traffic Control page to start traffic generation"
-    log_success "  4. Check interface assignments in INTERFACE_ASSIGNMENT.md"
+    log_success "  3. Services will auto-start after Wi-Fi configuration"
+    log_success "  4. Check interface assignments in the dashboard"
     echo
-    log_success "📚 DOCUMENTATION:"
-    log_success "  • GitHub: https://github.com/danryan06/wifi-dashboard"
-    log_success "  • Interface Info: /home/$PI_USER/wifi_test_dashboard/INTERFACE_ASSIGNMENT.md"
-    log_success "  • Troubleshooting: Check /home/$PI_USER/wifi_test_dashboard/logs/"
+    log_success "📊 TROUBLESHOOTING:"
+    log_success "  • Network status: sudo nmcli device status"
+    log_success "  • Service status: sudo systemctl status wifi-*.service"
+    log_success "  • Dashboard logs: sudo journalctl -u wifi-dashboard.service -f"
     echo
-    log_success "📊 MONITORING COMMANDS:"
-    log_success "  • Dashboard status: sudo systemctl status wifi-dashboard.service"
-    log_success "  • View logs: sudo journalctl -u wifi-dashboard.service -f"
-    log_success "  • Traffic services: sudo systemctl status traffic-*.service"
-    echo
-    echo -e "${PURPLE}🎊 Your intelligent Wi-Fi testing system is ready!${NC}"
-    echo -e "${GREEN}🔍 Check INTERFACE_ASSIGNMENT.md for optimization details${NC}"
+    echo -e "${PURPLE}🎊 Your robust Wi-Fi testing system is ready for Mist PoC demos!${NC}"
     echo
 }
 
@@ -526,15 +552,20 @@ handle_error() {
 # Set error trap
 trap handle_error ERR
 
-# Main execution
+# FIXED: Main execution with proper order
 main() {
     print_banner
     check_requirements
     detect_network_interfaces
     create_install_directory
-    apply_nm_wifi_defaults
+    
+    # FIXED: Critical network setup happens early
+    setup_network_manager
+    configure_wifi_settings
+    assign_interfaces_early
+    
     main_installation
-    harden_systemd_units
+    harden_services
 
     if verify_installation; then
         cleanup_installation
