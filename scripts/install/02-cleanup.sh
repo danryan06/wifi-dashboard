@@ -60,13 +60,27 @@ log_info "Cleaning up orphaned network configurations..."
 
 # Remove old NetworkManager connections that might conflict
 if command -v nmcli >/dev/null 2>&1; then
-    # Remove any connections with dashboard-related names
-    nmcli connection show | grep -iE "(dashboard|test|cnxn)" | awk '{print $1}' | while read -r conn_name; do
-        if [[ -n "$conn_name" && "$conn_name" != "NAME" ]]; then
-            log_info "Removing old NetworkManager connection: $conn_name"
-            nmcli connection delete "$conn_name" 2>/dev/null || log_warn "Could not remove connection: $conn_name"
+    # FIXED: Use UUIDs instead of names to avoid duplicate deletion issues
+    log_info "Scanning for dashboard-related NetworkManager connections..."
+    
+    # Get connections with UUIDs to avoid name collision issues
+    nmcli -t -f NAME,UUID connection show 2>/dev/null | grep -iE "(dashboard|test|cnxn)" | while IFS=':' read -r conn_name conn_uuid; do
+        if [[ -n "$conn_name" && -n "$conn_uuid" && "$conn_name" != "NAME" ]]; then
+            # Check if connection still exists before trying to delete
+            if nmcli connection show "$conn_uuid" >/dev/null 2>&1; then
+                log_info "Removing NetworkManager connection: $conn_name ($conn_uuid)"
+                if nmcli connection delete "$conn_uuid" 2>/dev/null; then
+                    log_info "✓ Successfully removed: $conn_name"
+                else
+                    log_warn "Could not remove connection: $conn_name"
+                fi
+            else
+                log_info "Connection $conn_name already removed"
+            fi
         fi
-    done
+    done || true  # Don't fail if no connections found
+    
+    log_info "✓ NetworkManager connection cleanup completed"
 fi
 
 # Clean up old wpa_supplicant configurations
