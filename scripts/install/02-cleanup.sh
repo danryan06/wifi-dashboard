@@ -91,14 +91,25 @@ if command -v nmcli >/dev/null 2>&1; then
             fi
             
             if [[ "$should_delete" == "true" ]]; then
-                log_info "Removing dashboard connection: $conn_name"
-                if nmcli connection delete "$conn_uuid" >/dev/null 2>&1; then
-                    log_info "✓ Successfully removed: $conn_name"
-                    ((cleanup_count++))
+                # Resolve UUID if missing
+                if [[ -z "${conn_uuid:-}" || "$conn_uuid" == "--" ]]; then
+                    conn_uuid="$(nmcli -t -f UUID connection show "$conn_name" 2>/dev/null | head -n1 || true)"
+                fi
+
+                if [[ -n "${conn_uuid:-}" && "$conn_uuid" != "--" ]]; then
+                    log_info "Removing dashboard connection: $conn_name"
+                    if nmcli connection delete "$conn_uuid" >/dev/null 2>&1; then
+                        log_info "✓ Successfully removed: $conn_name"
+                        ((cleanup_count++))
+                    else
+                        log_warn "Could not remove by UUID: $conn_name ($conn_uuid). Trying by name..."
+                        nmcli connection delete "$conn_name" >/dev/null 2>&1 || log_warn "Still could not remove: $conn_name"
+                    fi
                 else
-                    log_warn "Could not remove: $conn_name"
+                    log_warn "Skipping $conn_name — no UUID could be determined"
                 fi
             fi
+
             
         done < "$temp_connections"
         
@@ -138,9 +149,16 @@ fi
 
 # Clean up old cron jobs related to dashboard
 log_info "Removing old cron jobs..."
-if crontab -l 2>/dev/null | grep -q "wifi.*dashboard\|traffic.*generator"; then
+existing_cron="$(crontab -l 2>/dev/null || true)"
+if printf "%s\n" "$existing_cron" | grep -qE "wifi.*dashboard|traffic.*generator"; then
     log_info "Found dashboard-related cron jobs, removing..."
-    crontab -l 2>/dev/null | grep -v "wifi.*dashboard\|traffic.*generator" | crontab - || log_warn "Could not update crontab"
+    cleaned_cron="$(printf "%s\n" "$existing_cron" | grep -vE "wifi.*dashboard|traffic.*generator" || true)"
+    if [[ -n "$cleaned_cron" ]]; then
+        printf "%s\n" "$cleaned_cron" | crontab - || log_warn "Could not update crontab"
+    else
+        # No lines left — remove the crontab entirely
+        crontab -r 2>/dev/null || true
+    fi
 fi
 
 # Remove old dashboard installations
@@ -280,7 +298,7 @@ find /var/run -name "*.pid" -path "*wifi*" -delete 2>/dev/null || true
 log_info "Verifying cleanup completion..."
 
 # Check for remaining services
-remaining_services=$(systemctl list-unit-files | grep -iE "(wifi|traffic|dashboard)" | grep -v NetworkManager || true)
+remaining_services=$(systemctl list-unit-files --no-pager | grep -iE "(wifi|traffic|dashboard)" | grep -v NetworkManager || true)
 if [[ -n "$remaining_services" ]]; then
     log_warn "Some dashboard-related services may still exist:"
     echo "$remaining_services"
