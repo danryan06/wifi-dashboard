@@ -55,32 +55,68 @@ cleanup_service "traffic-lo"
 cleanup_service "wifi-test-dashboard"
 cleanup_service "wifi_dashboard"
 
-# Clean up any orphaned network configurations
+# Clean up any orphaned network configurations  
 log_info "Cleaning up orphaned network configurations..."
 
 # Remove old NetworkManager connections that might conflict
 if command -v nmcli >/dev/null 2>&1; then
-    # FIXED: Use UUIDs instead of names to avoid duplicate deletion issues
-    log_info "Scanning for dashboard-related NetworkManager connections..."
+    log_info "Performing NetworkManager connection cleanup..."
     
-    # Get connections with UUIDs to avoid name collision issues
-    nmcli -t -f NAME,UUID connection show 2>/dev/null | grep -iE "(dashboard|test|cnxn)" | while IFS=':' read -r conn_name conn_uuid; do
-        if [[ -n "$conn_name" && -n "$conn_uuid" && "$conn_name" != "NAME" ]]; then
-            # Check if connection still exists before trying to delete
-            if nmcli connection show "$conn_uuid" >/dev/null 2>&1; then
-                log_info "Removing NetworkManager connection: $conn_name ($conn_uuid)"
-                if nmcli connection delete "$conn_uuid" 2>/dev/null; then
-                    log_info "✓ Successfully removed: $conn_name"
-                else
-                    log_warn "Could not remove connection: $conn_name"
-                fi
-            else
-                log_info "Connection $conn_name already removed"
+    # FIXED: Simple but comprehensive approach without pipes/subshells
+    local cleanup_count=0
+    
+    # Save all connection names to a temporary file to avoid pipe issues
+    local temp_connections="/tmp/nm_connections_$$"
+    nmcli -t -f NAME,UUID connection show 2>/dev/null > "$temp_connections" || true
+    
+    if [[ -s "$temp_connections" ]]; then
+        log_info "Found NetworkManager connections, checking for dashboard-related ones..."
+        
+        # Process each connection safely
+        while IFS=':' read -r conn_name conn_uuid; do
+            # Skip empty lines and headers
+            [[ -z "$conn_name" || "$conn_name" == "NAME" ]] && continue
+            
+            # Check if this connection matches our dashboard patterns
+            local should_delete=false
+            
+            # Pattern matching for dashboard connections (replaces hardcoded TestSSID)
+            if [[ "$conn_name" =~ (wifi-good-|wifi-bad-|wired-cnxn|CNXNMist|dashboard|wifi-roam-) ]]; then
+                should_delete=true
             fi
-        fi
-    done || true  # Don't fail if no connections found
+            
+            # Also check for connections that might be from testing
+            if [[ "$conn_name" =~ (test.*wifi|demo.*wifi|poc.*wifi|simulation) ]]; then
+                should_delete=true
+            fi
+            
+            if [[ "$should_delete" == "true" ]]; then
+                log_info "Removing dashboard connection: $conn_name"
+                if nmcli connection delete "$conn_uuid" >/dev/null 2>&1; then
+                    log_info "✓ Successfully removed: $conn_name"
+                    ((cleanup_count++))
+                else
+                    log_warn "Could not remove: $conn_name"
+                fi
+            fi
+            
+        done < "$temp_connections"
+        
+        # Clean up temp file
+        rm -f "$temp_connections"
+        
+        log_info "✓ NetworkManager cleanup completed ($cleanup_count connections removed)"
+    else
+        log_info "No NetworkManager connections found"
+    fi
     
-    log_info "✓ NetworkManager connection cleanup completed"
+    # Ensure interfaces are properly managed
+    log_info "Ensuring Wi-Fi interfaces are managed by NetworkManager..."
+    nmcli device set wlan0 managed yes 2>/dev/null || true
+    nmcli device set wlan1 managed yes 2>/dev/null || true
+    
+else
+    log_info "NetworkManager not available, skipping connection cleanup"
 fi
 
 # Clean up old wpa_supplicant configurations
