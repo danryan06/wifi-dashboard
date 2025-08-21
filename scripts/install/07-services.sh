@@ -68,20 +68,24 @@ log_info "Creating Wi-Fi good client service..."
 cat > /etc/systemd/system/wifi-good.service <<EOF
 [Unit]
 Description=Wi-Fi Good Client Test
-After=network-online.target NetworkManager.service
-Wants=network-online.target
+Wants=NetworkManager.service
+After=NetworkManager.service network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
 Requires=NetworkManager.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env bash $PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh
-User=$PI_USER
-Group=$PI_USER
-WorkingDirectory=$PI_HOME/wifi_test_dashboard
-Restart=always
+User=root
+WorkingDirectory=/home/${PI_USER}/wifi_test_dashboard
+ExecStart=/usr/bin/env bash /home/${PI_USER}/wifi_test_dashboard/scripts/connect_and_curl.sh
+Restart=on-failure
 RestartSec=20
 StandardOutput=journal
 StandardError=journal
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target
@@ -94,6 +98,8 @@ cat > /etc/systemd/system/wifi-bad.service <<EOF
 Description=Wi-Fi Bad Client Test (Authentication Failures)
 Wants=NetworkManager.service
 After=NetworkManager.service network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -102,6 +108,8 @@ WorkingDirectory=/home/${PI_USER}/wifi_test_dashboard
 ExecStart=/usr/bin/env bash /home/${PI_USER}/wifi_test_dashboard/scripts/fail_auth_loop.sh
 Restart=on-failure
 RestartSec=20
+StandardOutput=journal
+StandardError=journal
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 NoNewPrivileges=yes
@@ -109,6 +117,7 @@ NoNewPrivileges=yes
 [Install]
 WantedBy=multi-user.target
 EOF
+
 
 # Function to create traffic generation services
 create_traffic_service() {

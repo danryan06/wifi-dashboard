@@ -188,41 +188,54 @@ freqs_for_band() {
 
 discover_bssids_for_ssid() {
   local target_ssid="$1"
-  local now=$(date +%s)
-  if [[ $((now - LAST_SCAN_TIME)) -lt $ROAMING_SCAN_INTERVAL ]]; then return 0; fi
+  local now
+  now=$(date +%s)
+  if [[ $((now - LAST_SCAN_TIME)) -lt $ROAMING_SCAN_INTERVAL ]]; then
+    return 0
+  fi
 
   log_msg "🔍 Scanning (${WIFI_BAND_PREFERENCE}) for BSSIDs broadcasting SSID: $target_ssid"
-  DISCOVERED_BSSIDS=(); BSSID_SIGNALS=()
+  DISCOVERED_BSSIDS=()
+  BSSID_SIGNALS=()
 
-  local freqs; freqs="$(freqs_for_band "$WIFI_BAND_PREFERENCE")"
-  sudo iw dev "$INTERFACE" scan freq $freqs 2>/dev/null \
-  | awk -v ss="$target_ssid" '
-      /BSS[[:space:]]/     { bssid=$2 }
-      /freq:[[:space:]]/   { freq=$2 }
-      /signal:[[:space:]]/ { sig=$2 }
-      /^[ \t]*SSID:[ \t]*/ {
-        sub(/^[ \t]*SSID:[ \t]*/, "", $0);                # strip label + leading space
-        curr_ssid=$0; gsub(/[ \t]+$/, "", curr_ssid);     # trim trailing space
-        if (curr_ssid==ss && bssid!="" && sig!="") {
-          gsub(/\(.*/, "", bssid);                        # drop "(on wlanX)"
-          printf "%s %d %d\n", bssid, int(sig), freq
-        }
-      }' \
-  | sort -k2,2nr | while read -r bssid sig freq; do
-      [[ -z "$bssid" ]] && continue
-      DISCOVERED_BSSIDS["$bssid"]="$target_ssid"
-      BSSID_SIGNALS["$bssid"]="$sig"
-      log_msg "📡 Found BSSID: $bssid (Signal: ${sig} dBm @ ${freq} MHz)"
-    done
+  # --- Primary path: implicit iw scan, filter band in software ---
+  # Use process substitution so the while loop runs in the *current* shell (no subshell).
+  while read -r bssid sig freq; do
+    [[ -z "$bssid" ]] && continue
+    DISCOVERED_BSSIDS["$bssid"]="$target_ssid"
+    BSSID_SIGNALS["$bssid"]="$sig"
+    log_msg "📡 Found BSSID: $bssid (Signal: ${sig} dBm @ ${freq} MHz)"
+  done < <(
+    sudo iw dev "$INTERFACE" scan 2>/dev/null \
+    | awk -v ss="$target_ssid" -v band="$WIFI_BAND_PREFERENCE" '
+        /BSS[[:space:]]/     { bssid=$2 }
+        /freq:[[:space:]]/   { freq=$2 }
+        /signal:[[:space:]]/ { sig=$2 }
+        /^[ \t]*SSID:[ \t]*/ {
+          sub(/^[ \t]*SSID:[ \t]*/, "", $0);
+          curr_ssid=$0;
+          gsub(/[ \t]+$/, "", curr_ssid);
+          ok_band = (band=="both") || (band=="2.4" && freq<3000) || (band=="5" && freq>5000);
+          if (curr_ssid==ss && ok_band && bssid!="" && sig!="") {
+            gsub(/\(.*/, "", bssid);         # drop "(on wlanX)" suffix if present
+            printf "%s %d %d\n", bssid, int(sig), freq;
+          }
+        }' \
+    | sort -k2,2nr
+  )
 
-  # Fallback if iw returned nothing (e.g., driver busy)
+  # --- Fallback: nmcli if iw yielded nothing (driver busy, etc.) ---
   if [[ ${#DISCOVERED_BSSIDS[@]} -eq 0 ]]; then
     if nmcli -t --separator '|' -f SSID,BSSID,FREQ,SIGNAL dev wifi list ifname "$INTERFACE" >/tmp/.nmwifi 2>/dev/null; then
       while IFS='|' read -r ssid bssid freq sig; do
         [[ "$ssid" == "$target_ssid" ]] || continue
-        [[ -n "$bssid" && "$freq" -lt 6000 ]] || continue
-        # Convert nmcli % → rough dBm so thresholding still works
-        [[ -n "$sig" ]] || continue
+        # Band filter (same logic as above)
+        case "$WIFI_BAND_PREFERENCE" in
+          2.4) [[ "$freq" -ge 3000 ]] && continue ;;
+          5)   [[ "$freq" -le 5000 ]] && continue ;;
+        esac
+        [[ -n "$bssid" && -n "$sig" ]] || continue
+        # Convert nmcli % → rough dBm for thresholding
         local dbm=$(( sig / 2 - 100 ))
         if (( dbm >= MIN_SIGNAL_THRESHOLD )); then
           DISCOVERED_BSSIDS["$bssid"]="$ssid"
@@ -235,10 +248,11 @@ discover_bssids_for_ssid() {
   fi
 
   LAST_SCAN_TIME="$now"
-  local count="${#DISCOVERED_BSSIDS[@]}"
+  local count=${#DISCOVERED_BSSIDS[@]}
 
   if (( count == 0 )); then
-    log_msg "⚠ No BSSIDs found for SSID: $target_ssid"; return 1
+    log_msg "⚠ No BSSIDs found for SSID: $target_ssid"
+    return 1
   elif (( count == 1 )); then
     log_msg "📶 Single BSSID found — roaming not possible"
   else
