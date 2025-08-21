@@ -63,10 +63,10 @@ if command -v nmcli >/dev/null 2>&1; then
     log_info "Performing NetworkManager connection cleanup..."
     
     # FIXED: Simple but comprehensive approach without pipes/subshells
-    local cleanup_count=0
+    cleanup_count=0
     
     # Save all connection names to a temporary file to avoid pipe issues
-    local temp_connections="/tmp/nm_connections_$$"
+    temp_connections="/tmp/nm_connections_$$"
     nmcli -t -f NAME,UUID connection show 2>/dev/null > "$temp_connections" || true
     
     if [[ -s "$temp_connections" ]]; then
@@ -78,7 +78,7 @@ if command -v nmcli >/dev/null 2>&1; then
             [[ -z "$conn_name" || "$conn_name" == "NAME" ]] && continue
             
             # Check if this connection matches our dashboard patterns
-            local should_delete=false
+            should_delete=false
             
             # Pattern matching for dashboard connections (replaces hardcoded TestSSID)
             if [[ "$conn_name" =~ (wifi-good-|wifi-bad-|wired-cnxn|CNXNMist|dashboard|wifi-roam-) ]]; then
