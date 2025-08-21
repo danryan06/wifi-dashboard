@@ -195,14 +195,16 @@ discover_bssids_for_ssid() {
   DISCOVERED_BSSIDS=(); BSSID_SIGNALS=()
 
   local freqs; freqs="$(freqs_for_band "$WIFI_BAND_PREFERENCE")"
-  sudo iw dev "$INTERFACE" scan $freqs 2>/dev/null \
+  sudo iw dev "$INTERFACE" scan freq $freqs 2>/dev/null \
   | awk -v ss="$target_ssid" '
-      /BSS[[:space:]]/ { bssid=$2 }
-      /freq:[[:space:]]/ { freq=$2 }
+      /BSS[[:space:]]/     { bssid=$2 }
+      /freq:[[:space:]]/   { freq=$2 }
       /signal:[[:space:]]/ { sig=$2 }
-      /^(\t)?SSID:[[:space:]]/ { sub(/^(\t)?SSID:[[:space:]]/, "", $0); curr_ssid=$0
+      /^[ \t]*SSID:[ \t]*/ {
+        sub(/^[ \t]*SSID:[ \t]*/, "", $0);                # strip label + leading space
+        curr_ssid=$0; gsub(/[ \t]+$/, "", curr_ssid);     # trim trailing space
         if (curr_ssid==ss && bssid!="" && sig!="") {
-          gsub(/\(.*/, "", bssid);
+          gsub(/\(.*/, "", bssid);                        # drop "(on wlanX)"
           printf "%s %d %d\n", bssid, int(sig), freq
         }
       }' \
@@ -212,6 +214,25 @@ discover_bssids_for_ssid() {
       BSSID_SIGNALS["$bssid"]="$sig"
       log_msg "📡 Found BSSID: $bssid (Signal: ${sig} dBm @ ${freq} MHz)"
     done
+
+  # Fallback if iw returned nothing (e.g., driver busy)
+  if [[ ${#DISCOVERED_BSSIDS[@]} -eq 0 ]]; then
+    if nmcli -t --separator '|' -f SSID,BSSID,FREQ,SIGNAL dev wifi list ifname "$INTERFACE" >/tmp/.nmwifi 2>/dev/null; then
+      while IFS='|' read -r ssid bssid freq sig; do
+        [[ "$ssid" == "$target_ssid" ]] || continue
+        [[ -n "$bssid" && "$freq" -lt 6000 ]] || continue
+        # Convert nmcli % → rough dBm so thresholding still works
+        [[ -n "$sig" ]] || continue
+        local dbm=$(( sig / 2 - 100 ))
+        if (( dbm >= MIN_SIGNAL_THRESHOLD )); then
+          DISCOVERED_BSSIDS["$bssid"]="$ssid"
+          BSSID_SIGNALS["$bssid"]="$dbm"
+          log_msg "📡 (nmcli) Found BSSID: $bssid (≈ ${dbm} dBm @ ${freq} MHz)"
+        fi
+      done < /tmp/.nmwifi
+      rm -f /tmp/.nmwifi
+    fi
+  fi
 
   LAST_SCAN_TIME="$now"
   local count="${#DISCOVERED_BSSIDS[@]}"

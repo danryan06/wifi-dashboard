@@ -92,20 +92,19 @@ log_info "Creating Wi-Fi bad client service..."
 cat > /etc/systemd/system/wifi-bad.service <<EOF
 [Unit]
 Description=Wi-Fi Bad Client Test (Authentication Failures)
-After=network-online.target NetworkManager.service
-Wants=network-online.target
-Requires=NetworkManager.service
+Wants=NetworkManager.service
+After=NetworkManager.service network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env bash $PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh
-User=$PI_USER
-Group=$PI_USER
-WorkingDirectory=$PI_HOME/wifi_test_dashboard
-Restart=always
-RestartSec=25
-StandardOutput=journal
-StandardError=journal
+User=root
+WorkingDirectory=/home/${PI_USER}/wifi_test_dashboard
+ExecStart=/usr/bin/env bash /home/${PI_USER}/wifi_test_dashboard/scripts/fail_auth_loop.sh
+Restart=on-failure
+RestartSec=20
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target
