@@ -150,18 +150,6 @@ detect_network_interfaces() {
     fi
 }
 
-# Create auto-interface assignment if script is missing
-create_auto_interface_assignment() {
-    log_step "Creating auto-interface assignment functionality..."
-    
-    local script_file="$PI_HOME/wifi_test_dashboard/scripts/install/04.5-auto-interface-assignment.sh"
-    
-    # Create the directory if it doesn't exist
-    mkdir -p "$(dirname "$script_file")"
-    
-    # Create the auto-interface assignment script locally
-    cat > "$script_file" << 'AUTO_SCRIPT_EOF'
-
 apply_nm_wifi_defaults() {
     log_step "Applying Wi-Fi regulatory domain and NetworkManager defaults..."
 
@@ -213,6 +201,17 @@ harden_systemd_units() {
     systemctl daemon-reload
 }
 
+# Create auto-interface assignment if script is missing
+create_auto_interface_assignment() {
+    log_step "Creating auto-interface assignment functionality..."
+    
+    local script_file="$PI_HOME/wifi_test_dashboard/scripts/install/04.5-auto-interface-assignment.sh"
+    
+    # Create the directory if it doesn't exist
+    mkdir -p "$(dirname "$script_file")"
+    
+    # Create the auto-interface assignment script locally
+    cat > "$script_file" << 'AUTO_SCRIPT_EOF'
 
 #!/usr/bin/env bash
 # Auto-generated interface assignment script
@@ -534,9 +533,9 @@ main() {
     detect_network_interfaces
     create_install_directory
     apply_nm_wifi_defaults
-    harden_systemd_units
     main_installation
-        
+    harden_systemd_units
+
     if verify_installation; then
         cleanup_installation
         print_success_message
