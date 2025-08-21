@@ -161,6 +161,59 @@ create_auto_interface_assignment() {
     
     # Create the auto-interface assignment script locally
     cat > "$script_file" << 'AUTO_SCRIPT_EOF'
+
+apply_nm_wifi_defaults() {
+    log_step "Applying Wi-Fi regulatory domain and NetworkManager defaults..."
+
+    # Persist kernel regulatory domain (helps brcmfmac/phy0 on Pi 3)
+    if ! grep -q 'cfg80211.ieee80211_regdom=US' /boot/cmdline.txt 2>/dev/null; then
+        sed -i 's/$/ cfg80211.ieee80211_regdom=US/' /boot/cmdline.txt
+        log_info "Appended cfg80211.ieee80211_regdom=US to /boot/cmdline.txt"
+    else
+        log_info "Regdom kernel arg already present"
+    fi
+
+    # Ensure wpa_supplicant sets country (applies at bringup)
+    if [[ -f /etc/wpa_supplicant/wpa_supplicant.conf ]]; then
+        sed -i '1s/^/country=US\n/;t;1i country=US' /etc/wpa_supplicant/wpa_supplicant.conf
+        log_info "Ensured country=US in wpa_supplicant.conf"
+    fi
+
+    # Disable scan MAC randomization (stabilizes DHCP + Mist analytics)
+    mkdir -p /etc/NetworkManager/conf.d
+    printf "[device]\nwifi.scan-rand-mac-address=no\n" > /etc/NetworkManager/conf.d/10-scan-mac.conf
+    log_info "Wrote /etc/NetworkManager/conf.d/10-scan-mac.conf"
+
+    # Restart NM and ensure it manages wlan* devices
+    systemctl restart NetworkManager || true
+    nmcli device set wlan0 managed yes 2>/dev/null || true
+    nmcli device set wlan1 managed yes 2>/dev/null || true
+    log_info "NetworkManager restarted; wlan0/wlan1 set managed (if present)"
+}
+
+harden_systemd_units() {
+    log_step "Hardening Wi-Fi service unit files (restart backoff + NM ordering)..."
+    for u in wifi-good.service wifi-bad.service; do
+        unit="/etc/systemd/system/$u"
+        [[ -f "$unit" ]] || continue
+
+        # Ensure Wants/After on NetworkManager and restart backoff
+        grep -q '^Wants=NetworkManager.service' "$unit" || \
+          sed -i '/^\[Unit\]/a Wants=NetworkManager.service' "$unit"
+        grep -q '^After=NetworkManager.service' "$unit" || \
+          sed -i '/^\[Unit\]/a After=NetworkManager.service network-online.target' "$unit"
+        grep -q '^StartLimitIntervalSec=' "$unit" || \
+          sed -i '/^\[Unit\]/a StartLimitIntervalSec=300\nStartLimitBurst=3' "$unit"
+
+        grep -q '^Restart=' "$unit" || \
+          sed -i '/^\[Service\]/a Restart=on-failure' "$unit"
+        grep -q '^RestartSec=' "$unit" || \
+          sed -i '/^\[Service\]/a RestartSec=20' "$unit"
+    done
+    systemctl daemon-reload
+}
+
+
 #!/usr/bin/env bash
 # Auto-generated interface assignment script
 
@@ -480,8 +533,10 @@ main() {
     check_requirements
     detect_network_interfaces
     create_install_directory
+    apply_nm_wifi_defaults
+    harden_systemd_units
     main_installation
-    
+        
     if verify_installation; then
         cleanup_installation
         print_success_message

@@ -165,8 +165,9 @@ attempt_connection_with_wrong_password() {
         ssid "$ssid" \
         wifi-sec.key-mgmt wpa-psk \
         wifi-sec.psk "$wrong_password" \
-        ipv4.method auto \
-        ipv6.method auto >/dev/null 2>&1; then
+        wifi.cloned-mac-address preserve \
+        ipv4.method disabled \
+        ipv6.method ignore >/dev/null 2>&1; then
         log_msg "✓ Created connection profile with wrong password"
     else
         log_msg "✗ Failed to create connection profile"

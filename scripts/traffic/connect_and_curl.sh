@@ -75,6 +75,8 @@ ROAMING_INTERVAL="${WIFI_ROAMING_INTERVAL:-120}"  # Roam every 2 minutes
 ROAMING_SCAN_INTERVAL="${WIFI_ROAMING_SCAN_INTERVAL:-30}"  # Rescan for BSSIDs every 30 seconds
 MIN_SIGNAL_THRESHOLD="${WIFI_MIN_SIGNAL_THRESHOLD:--75}"  # Minimum signal strength (dBm)
 ROAMING_SIGNAL_DIFF="${WIFI_ROAMING_SIGNAL_DIFF:-10}"     # Signal difference to trigger roaming
+# Band preference: 2.4 | 5 | both  (Pi 3 defaults to 2.4)
+WIFI_BAND_PREFERENCE="${WIFI_BAND_PREFERENCE:-2.4}"
 
 # Traffic generation settings
 TRAFFIC_INTENSITY="${WLAN0_TRAFFIC_INTENSITY:-medium}"
@@ -175,114 +177,56 @@ check_wifi_interface() {
     return 0
 }
 
-# --- FIXED BSSID Discovery and Management ---
+freqs_for_band() {
+  case "${1:-2.4}" in
+    2.4) echo "2412 2417 2422 2427 2432 2437 2442 2447 2452 2457 2462 2467 2472" ;;
+    5)   echo "5180 5200 5220 5240 5260 5280 5300 5320 5500 5520 5540 5560 5580 5600 5620 5640 5660 5680 5700 5720 5745 5765 5785 5805 5825" ;;
+    both) echo "$(freqs_for_band 2.4) $(freqs_for_band 5)" ;;
+    *) echo "$(freqs_for_band 2.4)";;
+  esac
+}
+
 discover_bssids_for_ssid() {
-    local target_ssid="$1"
-    local current_time=$(date +%s)
-    
-    # Only rescan if enough time has passed
-    if [[ $((current_time - LAST_SCAN_TIME)) -lt $ROAMING_SCAN_INTERVAL ]]; then
-        return 0
-    fi
-    
-    log_msg "🔍 Scanning for BSSIDs broadcasting SSID: $target_ssid"
-    
-    # Clear previous discoveries
-    DISCOVERED_BSSIDS=()
-    BSSID_SIGNALS=()
-    
-    # Trigger fresh scan and wait longer for results
-    nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
-    sleep 5  # Increased wait time
-    
-    local bssid_count=0
-    
-    # FIXED: Parse nmcli output correctly - BSSID is field 1, not field 2
-    while read -r line; do
-        # Skip header and empty lines
-        [[ "$line" =~ ^(IN-USE|--|\s*$) ]] && continue
-        
-        # Look for lines containing our target SSID
-        if echo "$line" | grep -q "$target_ssid"; then
-            # FIXED: BSSID is field 1 (first column after any IN-USE marker)
-            local bssid=$(echo "$line" | awk '{print $1}')
-            # Extract signal strength (look for numbers between 0-100)
-            local signal=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/ && $i >= 0 && $i <= 100) print $i}' | head -1)
-            
-            # Clean up BSSID (remove asterisks, whitespace)
-            bssid=$(echo "$bssid" | tr -d '\*' | tr -d ' ')
-            
-            # Validate BSSID format (MAC address)
-            if [[ "$bssid" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
-                # Convert signal to dBm if needed
-                if [[ -n "$signal" ]] && [[ "$signal" =~ ^[0-9]+$ ]]; then
-                    if [[ $signal -le 100 ]]; then
-                        # Convert percentage to approximate dBm
-                        signal=$(( -100 + (signal * 70 / 100) ))
-                    fi
-                fi
-                
-                DISCOVERED_BSSIDS["$bssid"]="$target_ssid"
-                BSSID_SIGNALS["$bssid"]="${signal:-unknown}"
-                log_msg "📡 Found BSSID: $bssid (Signal: ${signal:-unknown}dBm)"
-                ((bssid_count++))
-            fi
-        fi
-    done < <(nmcli device wifi list ifname "$INTERFACE" 2>/dev/null)
-    
-    # Fallback to tabular format if needed
-    if [[ $bssid_count -eq 0 ]]; then
-        log_msg "🔄 Trying tabular format as backup..."
-        
-        local scan_output
-        scan_output=$(nmcli -t -f BSSID,SSID,SIGNAL device wifi list ifname "$INTERFACE" 2>/dev/null || echo "")
-        
-        while IFS=':' read -r bssid ssid signal; do
-            # Clean up fields
-            bssid=$(echo "$bssid" | tr -d '\*' | tr -d ' ')
-            ssid=$(echo "$ssid" | tr -d ' ')
-            signal=$(echo "$signal" | tr -d ' ')
-            
-            if [[ "$ssid" == "$target_ssid" ]] && [[ -n "$bssid" ]] && [[ "$bssid" != "--" ]] && [[ "$bssid" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
-                DISCOVERED_BSSIDS["$bssid"]="$ssid"
-                BSSID_SIGNALS["$bssid"]="$signal"
-                log_msg "📡 Found BSSID: $bssid (Signal: ${signal}dBm)"
-                ((bssid_count++))
-            fi
-        done <<< "$scan_output"
-    fi
-    
-    LAST_SCAN_TIME=$current_time
-    
-    if [[ $bssid_count -eq 0 ]]; then
-        log_msg "⚠ No BSSIDs found for SSID: $target_ssid"
-        log_msg "🔍 Debug: Available SSIDs on $INTERFACE:"
-        nmcli device wifi list ifname "$INTERFACE" 2>/dev/null | head -5 | while read -r line; do
-            log_msg "   $line"
-        done
-        
-        log_msg "🔍 Debug: Current iwconfig state:"
-        iwconfig "$INTERFACE" 2>/dev/null | grep -E "(ESSID|Access Point)" | while read -r line; do
-            log_msg "   $line"
-        done
-        
-        return 1
-    elif [[ $bssid_count -eq 1 ]]; then
-        log_msg "📶 Single BSSID found - roaming not possible"
-        if [[ "$ROAMING_ENABLED" == "true" ]]; then
-            log_msg "💡 For roaming demo, ensure multiple APs broadcast the same SSID"
-        fi
-    else
-        log_msg "🎯 Multiple BSSIDs found ($bssid_count) - roaming enabled!"
-        
-        # Show all discovered BSSIDs for demo purposes
-        for bssid in "${!DISCOVERED_BSSIDS[@]}"; do
-            local signal="${BSSID_SIGNALS[$bssid]}"
-            log_msg "🏠 Available: $bssid (${signal}dBm)"
-        done
-    fi
-    
-    return 0
+  local target_ssid="$1"
+  local now=$(date +%s)
+  if [[ $((now - LAST_SCAN_TIME)) -lt $ROAMING_SCAN_INTERVAL ]]; then return 0; fi
+
+  log_msg "🔍 Scanning (${WIFI_BAND_PREFERENCE}) for BSSIDs broadcasting SSID: $target_ssid"
+  DISCOVERED_BSSIDS=(); BSSID_SIGNALS=()
+
+  local freqs; freqs="$(freqs_for_band "$WIFI_BAND_PREFERENCE")"
+  sudo iw dev "$INTERFACE" scan $freqs 2>/dev/null \
+  | awk -v ss="$target_ssid" '
+      /BSS[[:space:]]/ { bssid=$2 }
+      /freq:[[:space:]]/ { freq=$2 }
+      /signal:[[:space:]]/ { sig=$2 }
+      /^(\t)?SSID:[[:space:]]/ { sub(/^(\t)?SSID:[[:space:]]/, "", $0); curr_ssid=$0
+        if (curr_ssid==ss && bssid!="" && sig!="") {
+          gsub(/\(.*/, "", bssid);
+          printf "%s %d %d\n", bssid, int(sig), freq
+        }
+      }' \
+  | sort -k2,2nr | while read -r bssid sig freq; do
+      [[ -z "$bssid" ]] && continue
+      DISCOVERED_BSSIDS["$bssid"]="$target_ssid"
+      BSSID_SIGNALS["$bssid"]="$sig"
+      log_msg "📡 Found BSSID: $bssid (Signal: ${sig} dBm @ ${freq} MHz)"
+    done
+
+  LAST_SCAN_TIME="$now"
+  local count="${#DISCOVERED_BSSIDS[@]}"
+
+  if (( count == 0 )); then
+    log_msg "⚠ No BSSIDs found for SSID: $target_ssid"; return 1
+  elif (( count == 1 )); then
+    log_msg "📶 Single BSSID found — roaming not possible"
+  else
+    log_msg "🎯 Multiple BSSIDs found ($count) — roaming enabled!"
+    for b in "${!DISCOVERED_BSSIDS[@]}"; do
+      log_msg "🏠 Available: $b (${BSSID_SIGNALS[$b]} dBm)"
+    done
+  fi
+  return 0
 }
 
 get_current_bssid() {
@@ -377,11 +321,13 @@ perform_roaming() {
         con-name "$roam_connection_name" \
         ifname "$INTERFACE" \
         ssid "$target_ssid" \
+        802-11-wireless.bssid "$target_bssid" \
         wifi-sec.key-mgmt wpa-psk \
         wifi-sec.psk "$target_password" \
-        wifi.bssid "$target_bssid" \
+        wifi.cloned-mac-address preserve \
         ipv4.method auto \
-        ipv6.method auto >/dev/null 2>&1; then
+        ipv6.method ignore >/dev/null 2>&1; then
+
         
         log_msg "✓ Created roaming connection profile"
     else
@@ -474,11 +420,12 @@ connect_to_wifi_with_roaming() {
             con-name "$connection_name" \
             ifname "$INTERFACE" \
             ssid "$ssid" \
+            802-11-wireless.bssid "$target_bssid" \
             wifi-sec.key-mgmt wpa-psk \
             wifi-sec.psk "$password" \
-            wifi.bssid "$target_bssid" \
+            wifi.cloned-mac-address preserve \
             ipv4.method auto \
-            ipv6.method auto >/dev/null 2>&1; then
+            ipv6.method ignore >/dev/null 2>&1; then
             
             log_msg "✓ Created Wi-Fi connection with specific BSSID"
             
