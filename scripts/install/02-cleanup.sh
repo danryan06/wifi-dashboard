@@ -1,319 +1,190 @@
 #!/usr/bin/env bash
-# Fixed: Comprehensive cleanup of previous installations and conflicting services
-set -euo pipefail
+# 02-cleanup.sh — Comprehensive cleanup of previous installations and conflicting services
 
+# Strict mode + useful error trap
+set -Eeuo pipefail
+trap 'rc=$?; echo -e "\033[0;31m[ERROR]\033[0m Cleanup aborted (exit $rc) at line $LINENO while running: $BASH_COMMAND"; exit $rc' ERR
+
+# Safer globbing and path
+shopt -s nullglob
+export PATH="/usr/sbin:/sbin:/usr/bin:/bin:$PATH"
+
+# Logging helpers
 log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
 log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
-log_error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; }
+log_error(){ echo -e "\033[0;31m[ERROR]\033[0m $1"; }
 
-log_info "Starting comprehensive cleanup of previous installations..."
+# Require root (installer typically runs as root)
+if [[ $EUID -ne 0 ]]; then
+  log_error "Please run as root (e.g., via the installer or: sudo bash 02-cleanup.sh)"; exit 1
+fi
 
+# Determine the target (non-root) user for user-scoped cleanup
+TARGET_USER="${PI_USER:-${SUDO_USER:-$(id -un)}}"
+TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6 || true)"
+[[ -z "${TARGET_HOME:-}" ]] && TARGET_HOME="/home/$TARGET_USER"
+PI_HOME="${PI_HOME:-$TARGET_HOME}"
+
+# Optional: old dashboard dir (safe-guarded)
 DASHBOARD_DIR="$PI_HOME/wifi_test_dashboard"
 
-# Function to safely stop and disable a service
+log_info "Starting comprehensive cleanup of previous installations..."
+log_info "Target user: $TARGET_USER  |  Home: $TARGET_HOME"
+
+# ------------------------------
+# 1) Stop/disable/remove services
+# ------------------------------
 cleanup_service() {
-    local service_name="$1"
-    local service_file="/etc/systemd/system/${service_name}.service"
-    
-    if systemctl list-unit-files | grep -q "^${service_name}.service"; then
-        log_info "Cleaning up service: $service_name"
-        
-        # Stop the service
-        if systemctl is-active --quiet "$service_name"; then
-            systemctl stop "$service_name" || log_warn "Could not stop $service_name"
-        fi
-        
-        # Disable the service
-        if systemctl is-enabled --quiet "$service_name" >/dev/null 2>&1; then
-            systemctl disable "$service_name" || log_warn "Could not disable $service_name"
-        fi
-        
-        # Remove service file
-        if [[ -f "$service_file" ]]; then
-            rm -f "$service_file"
-            log_info "Removed service file: $service_file"
-        fi
+  local svc="$1"
+  local unit="/etc/systemd/system/${svc}.service"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet "${svc}.service"; then
+      log_info "Stopping service: ${svc}.service"
+      systemctl stop "${svc}.service" || log_warn "Failed to stop ${svc}"
     fi
+    if systemctl is-enabled --quiet "${svc}.service"; then
+      log_info "Disabling service: ${svc}.service"
+      systemctl disable "${svc}.service" || log_warn "Failed to disable ${svc}"
+    fi
+  fi
+
+  if [[ -f "$unit" ]]; then
+    log_info "Removing unit file: $unit"
+    rm -f -- "$unit" || log_warn "Failed to remove $unit"
+  fi
 }
 
-# Clean up all dashboard-related services
 log_info "Stopping and removing existing dashboard services..."
 
-# Current services
-cleanup_service "wifi-dashboard"
-cleanup_service "wired-test"
-cleanup_service "wifi-good"
-cleanup_service "wifi-bad"
+# Add/adjust names here as needed
+SERVICES=(
+  "wifi-good" "wifi-bad" "wifi-dashboard"
+  "wifi_test_dashboard" "wifi-test-dashboard" "wifi_dashboard"
+  "traffic-eth0" "traffic-wlan0" "traffic-wlan1" "traffic-lo"
+)
 
-# Legacy traffic services that may conflict
-cleanup_service "traffic-eth0"
-cleanup_service "traffic-wlan0" 
-cleanup_service "traffic-wlan1"
-cleanup_service "traffic-lo"
+for s in "${SERVICES[@]}"; do cleanup_service "$s"; done
+for unit in /etc/systemd/system/wifi-*.service; do
+  bn="$(basename "$unit" .service)"
+  cleanup_service "$bn"
+done
 
-# Other possible variations
-cleanup_service "wifi-test-dashboard"
-cleanup_service "wifi_dashboard"
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload || true
+fi
+log_info "✓ Dashboard services cleaned up (or were not present)"
 
-# Clean up any orphaned network configurations  
+# --------------------------------------
+# 2) NetworkManager connection/keyfile GC
+# --------------------------------------
 log_info "Cleaning up orphaned network configurations..."
+log_info "Performing NetworkManager connection cleanup..."
 
-# Remove old NetworkManager connections that might conflict
 if command -v nmcli >/dev/null 2>&1; then
-    log_info "Performing NetworkManager connection cleanup..."
-    
-    # FIXED: Simple but comprehensive approach without pipes/subshells
-    cleanup_count=0
-    
-    # Save all connection names to a temporary file to avoid pipe issues
-    temp_connections="/tmp/nm_connections_$$"
-    nmcli -t -f NAME,UUID connection show 2>/dev/null > "$temp_connections" || true
-    
-    if [[ -s "$temp_connections" ]]; then
-        log_info "Found NetworkManager connections, checking for dashboard-related ones..."
-        
-        # Process each connection safely
-        while IFS=':' read -r conn_name conn_uuid; do
-            # Skip empty lines and headers
-            [[ -z "$conn_name" || "$conn_name" == "NAME" ]] && continue
-            
-            # Check if this connection matches our dashboard patterns
-            should_delete=false
-            
-            # Pattern matching for dashboard connections (replaces hardcoded TestSSID)
-            if [[ "$conn_name" =~ (wifi-good-|wifi-bad-|wired-cnxn|CNXNMist|dashboard|wifi-roam-) ]]; then
-                should_delete=true
-            fi
-            
-            # Also check for connections that might be from testing
-            if [[ "$conn_name" =~ (test.*wifi|demo.*wifi|poc.*wifi|simulation) ]]; then
-                should_delete=true
-            fi
-            
-            if [[ "$should_delete" == "true" ]]; then
-                # Resolve UUID if missing
-                if [[ -z "${conn_uuid:-}" || "$conn_uuid" == "--" ]]; then
-                    conn_uuid="$(nmcli -t -f UUID connection show "$conn_name" 2>/dev/null | head -n1 || true)"
-                fi
+  nm_list="$(nmcli -t -f NAME,UUID connection show 2>/dev/null || true)"
+  if [[ -n "$nm_list" ]]; then
+    log_info "Found NetworkManager connections, checking for dashboard-related ones..."
+    IFS=$'\n'
+    for line in $nm_list; do
+      # Interpret last colon-delimited field as UUID, the rest as NAME (so names may contain ':')
+      name="${line%:*}"
+      uuid="${line##*:}"
+      [[ "$uuid" == "$name" ]] && uuid=""  # in case there's no UUID
 
-                if [[ -n "${conn_uuid:-}" && "$conn_uuid" != "--" ]]; then
-                    log_info "Removing dashboard connection: $conn_name"
-                    if nmcli connection delete "$conn_uuid" >/dev/null 2>&1; then
-                        log_info "✓ Successfully removed: $conn_name"
-                        ((cleanup_count++))
-                    else
-                        log_warn "Could not remove by UUID: $conn_name ($conn_uuid). Trying by name..."
-                        nmcli connection delete "$conn_name" >/dev/null 2>&1 || log_warn "Still could not remove: $conn_name"
-                    fi
-                else
-                    log_warn "Skipping $conn_name — no UUID could be determined"
-                fi
-            fi
+      # Hints for what we consider "ours" — add more terms if needed
+      # You can extend at runtime by setting EXTRA_NAME_HINTS="foo|bar"
+      HINTS="${EXTRA_NAME_HINTS:-wifi|dashboard|mist|traffic|test|wifi[-_]good|wifi[-_]bad|Ryan|Mist|Test}"
+      if [[ "$name" =~ $HINTS ]]; then
+        log_info "Removing dashboard connection: $name"
 
-            
-        done < "$temp_connections"
-        
-        # Clean up temp file
-        rm -f "$temp_connections"
-        
-        log_info "✓ NetworkManager cleanup completed ($cleanup_count connections removed)"
-    else
-        log_info "No NetworkManager connections found"
+        if [[ -n "$uuid" && "$uuid" != "--" ]]; then
+          nmcli connection delete "$uuid" >/dev/null 2>&1 \
+            && log_info "✓ Successfully removed: $name" \
+            || { log_warn "Delete by UUID failed for $name ($uuid). Trying by name..."; nmcli connection delete "$name" >/dev/null 2>&1 || log_warn "Could not remove $name"; }
+        else
+          nmcli connection delete "$name" >/dev/null 2>&1 \
+            && log_info "✓ Successfully removed: $name" \
+            || log_warn "Could not remove: $name"
+        fi
+      fi
+    done
+    unset IFS
+  else
+    log_info "No NetworkManager connections found"
+  fi
+
+  # Remove orphaned keyfiles likely created by the dashboard/test harness
+  for f in /etc/NetworkManager/system-connections/*; do
+    base="$(basename "$f")"
+    if [[ "$base" =~ (wifi|dashboard|mist|traffic|test|Ryan|Bad|Good) ]]; then
+      log_info "Removing orphaned NM keyfile: $base"
+      rm -f -- "$f" || log_warn "Could not remove $f"
     fi
-    
-    # Ensure interfaces are properly managed
-    log_info "Ensuring Wi-Fi interfaces are managed by NetworkManager..."
-    nmcli device set wlan0 managed yes 2>/dev/null || true
-    nmcli device set wlan1 managed yes 2>/dev/null || true
-    
+  done
+
+  # Reload NM to pick up changes (no restart to avoid disruption)
+  nmcli connection reload >/dev/null 2>&1 || true
 else
-    log_info "NetworkManager not available, skipping connection cleanup"
+  log_warn "nmcli not found; skipping NetworkManager cleanup"
 fi
 
-# Clean up old wpa_supplicant configurations
-log_info "Cleaning up legacy wpa_supplicant configurations..."
+# -----------------------------
+# 3) Cron cleanup (root & user)
+# -----------------------------
+log_info "Pruning dashboard-related cron jobs (root and $TARGET_USER)..."
 
-if [[ -f /etc/wpa_supplicant/wpa_supplicant.conf ]]; then
-    # Back up original if not already backed up
-    if [[ ! -f /etc/wpa_supplicant/wpa_supplicant.conf.orig ]]; then
-        cp /etc/wpa_supplicant/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant.conf.orig
-        log_info "Backed up original wpa_supplicant.conf"
-    fi
-    
-    # Remove any dashboard-specific entries
-    if grep -q "CNXNMist\|dashboard\|test" /etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null; then
-        log_info "Removing dashboard entries from wpa_supplicant.conf"
-        sed -i '/CNXNMist\|dashboard\|test/,+10d' /etc/wpa_supplicant/wpa_supplicant.conf || true
-    fi
-fi
+clean_cron_user() {
+  local user="$1"
+  local cur cleaned
 
-# Clean up old cron jobs related to dashboard
-log_info "Removing old cron jobs..."
-existing_cron="$(crontab -l 2>/dev/null || true)"
-if printf "%s\n" "$existing_cron" | grep -qE "wifi.*dashboard|traffic.*generator"; then
-    log_info "Found dashboard-related cron jobs, removing..."
-    cleaned_cron="$(printf "%s\n" "$existing_cron" | grep -vE "wifi.*dashboard|traffic.*generator" || true)"
-    if [[ -n "$cleaned_cron" ]]; then
-        printf "%s\n" "$cleaned_cron" | crontab - || log_warn "Could not update crontab"
+  cur="$(crontab -u "$user" -l 2>/dev/null || true)"
+  # Nothing to do if no crontab
+  [[ -z "$cur" ]] && return 0
+
+  # Ensure grep failures don't trip pipefail by capturing output, not piping to crontab directly
+  if printf "%s\n" "$cur" | grep -qE "wifi.*dashboard|traffic.*generator"; then
+    log_info "Found cron entries for $user; removing dashboard entries"
+    cleaned="$(printf "%s\n" "$cur" | grep -vE "wifi.*dashboard|traffic.*generator" || true)"
+    if [[ -n "$cleaned" ]]; then
+      printf "%s\n" "$cleaned" | crontab -u "$user" - || { log_warn "Could not update $user crontab; removing entirely"; crontab -u "$user" -r 2>/dev/null || true; }
     else
-        # No lines left — remove the crontab entirely
-        crontab -r 2>/dev/null || true
+      crontab -u "$user" -r 2>/dev/null || true
     fi
+  fi
+}
+
+clean_cron_user "$TARGET_USER"
+clean_cron_user "root"
+
+# -----------------------------
+# 4) Files, logs, and processes
+# -----------------------------
+log_info "Removing leftover files and logs..."
+
+# Logs
+rm -f /var/log/wifi-*.log /var/log/wifi_*.log /var/log/traffic-*.log 2>/dev/null || true
+
+# State/temp
+rm -rf /tmp/wifi-dashboard-* /tmp/wifi_* 2>/dev/null || true
+
+# Old dashboard dir (only if it looks sane)
+if [[ -n "${DASHBOARD_DIR:-}" && -d "$DASHBOARD_DIR" && "$DASHBOARD_DIR" != "/" ]]; then
+  log_info "Removing old dashboard directory: $DASHBOARD_DIR"
+  rm -rf -- "$DASHBOARD_DIR" || log_warn "Could not remove $DASHBOARD_DIR"
 fi
 
-# Remove old dashboard installations
-log_info "Removing old dashboard installations..."
-
-# Common installation directories
-OLD_DIRS=(
-    "/home/$PI_USER/wifi_dashboard"
-    "/home/$PI_USER/wifi-dashboard"
-    "/home/$PI_USER/wifi_test"
-    "/opt/wifi-dashboard"
-    "/usr/local/wifi-dashboard"
-)
-
-for old_dir in "${OLD_DIRS[@]}"; do
-    if [[ -d "$old_dir" ]]; then
-        log_info "Removing old installation directory: $old_dir"
-        rm -rf "$old_dir"
-    fi
-done
-
-# Clean up the current dashboard directory if it exists (for fresh install)
-if [[ -d "$DASHBOARD_DIR" ]]; then
-    log_info "Removing existing dashboard directory: $DASHBOARD_DIR"
-    
-    # Stop any running processes first
-    pkill -f "$DASHBOARD_DIR" || true
-    
-    # Remove the directory
-    rm -rf "$DASHBOARD_DIR"
-fi
-
-# Clean up old log files and temporary data
-log_info "Cleaning up old logs and temporary data..."
-
-# Common log locations
-LOG_DIRS=(
-    "/var/log/wifi-dashboard"
-    "/tmp/wifi-dashboard"
-    "/tmp/traffic-gen"
-)
-
-for log_dir in "${LOG_DIRS[@]}"; do
-    if [[ -d "$log_dir" ]]; then
-        log_info "Removing old log directory: $log_dir"
-        rm -rf "$log_dir"
-    fi
-done
-
-# Clean up old Python packages that might conflict
-log_info "Checking for conflicting Python packages..."
-
-if command -v pip3 >/dev/null 2>&1; then
-    # Remove any dashboard-specific packages that might conflict
-    pip3 uninstall -y wifi-dashboard wifi-test-dashboard 2>/dev/null || true
-fi
-
-# Clean up old systemd timer files
-log_info "Cleaning up old systemd timers..."
-
-TIMER_FILES=(
-    "/etc/systemd/system/traffic-generator.timer"
-    "/etc/systemd/system/wifi-test.timer"
-    "/etc/systemd/system/dashboard-update.timer"
-)
-
-for timer_file in "${TIMER_FILES[@]}"; do
-    if [[ -f "$timer_file" ]]; then
-        # Get timer name
-        timer_name=$(basename "$timer_file" .timer)
-        
-        # Stop and disable timer
-        systemctl stop "$timer_name.timer" 2>/dev/null || true
-        systemctl disable "$timer_name.timer" 2>/dev/null || true
-        
-        # Remove timer file
-        rm -f "$timer_file"
-        log_info "Removed old timer: $timer_file"
-    fi
-done
-
-# Clean up old NetworkManager configuration files that might conflict
-log_info "Cleaning up old NetworkManager configuration files..."
-
-OLD_NM_CONFIGS=(
-    "/etc/NetworkManager/conf.d/01-dashboard.conf"
-    "/etc/NetworkManager/conf.d/wifi-test.conf"
-    "/etc/NetworkManager/conf.d/dashboard-wifi.conf"
-)
-
-for config_file in "${OLD_NM_CONFIGS[@]}"; do
-    if [[ -f "$config_file" ]]; then
-        log_info "Removing old NetworkManager config: $config_file"
-        rm -f "$config_file"
-    fi
-done
-
-# Kill any orphaned processes
-log_info "Terminating orphaned dashboard processes..."
-
-# Kill processes related to dashboard
-pkill -f "wifi.*dashboard" || true
-pkill -f "traffic.*generator" || true
-pkill -f "connect_and_curl" || true
-pkill -f "fail_auth_loop" || true
-pkill -f "wired_simulation" || true
-
-# Wait for processes to terminate
-sleep 2
-
-# Force kill if still running
-pkill -9 -f "wifi.*dashboard" 2>/dev/null || true
-pkill -9 -f "traffic.*generator" 2>/dev/null || true
-
-# Clean up old package caches
-log_info "Cleaning up package caches..."
-apt-get autoremove -y || log_warn "Could not run autoremove"
-apt-get autoclean || log_warn "Could not run autoclean"
-
-# Reload systemd after all service cleanup
-log_info "Reloading systemd daemon..."
-systemctl daemon-reload
-
-# Reset NetworkManager to clean state
-if systemctl is-active --quiet NetworkManager; then
-    log_info "Restarting NetworkManager for clean state..."
-    systemctl restart NetworkManager
-    sleep 3
-fi
-
-# Clean up any remaining PID files
-log_info "Cleaning up old PID files..."
-find /tmp -name "*.pid" -path "*wifi*" -delete 2>/dev/null || true
-find /var/run -name "*.pid" -path "*wifi*" -delete 2>/dev/null || true
-
-# Final verification
-log_info "Verifying cleanup completion..."
-
-# Check for remaining services
-remaining_services=$(systemctl list-unit-files --no-pager | grep -iE "(wifi|traffic|dashboard)" | grep -v NetworkManager || true)
-if [[ -n "$remaining_services" ]]; then
-    log_warn "Some dashboard-related services may still exist:"
-    echo "$remaining_services"
-else
-    log_info "✓ All dashboard services cleaned up"
-fi
-
-# Check for remaining processes
-remaining_processes=$(ps aux | grep -iE "(wifi.*dashboard|traffic.*gen)" | grep -v grep || true)
+# Kill any lingering processes (best-effort)
+remaining_processes="$(ps aux | grep -iE "(wifi.*dashboard|traffic.*gen)" | grep -v grep || true)"
 if [[ -n "$remaining_processes" ]]; then
-    log_warn "Some dashboard-related processes may still be running:"
-    echo "$remaining_processes"
+  log_warn "Some dashboard-related processes may still be running; attempting to terminate:"
+  echo "$remaining_processes" | awk '{print $2}' | xargs -r kill -TERM || true
+  sleep 1
+  echo "$remaining_processes" | awk '{print $2}' | xargs -r kill -KILL || true
 else
-    log_info "✓ All dashboard processes terminated"
+  log_info "✓ All dashboard processes terminated"
 fi
 
 log_info "✓ Comprehensive cleanup completed successfully"
 log_info "System is ready for fresh dashboard installation"
+exit 0
