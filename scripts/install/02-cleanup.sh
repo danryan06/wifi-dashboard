@@ -39,11 +39,11 @@ cleanup_service() {
   local unit="/etc/systemd/system/${svc}.service"
 
   if command -v systemctl >/dev/null 2>&1; then
-    if systemctl is-active --quiet "${svc}.service"; then
+    if systemctl is-active --quiet "${svc}.service" 2>/dev/null; then
       log_info "Stopping service: ${svc}.service"
       systemctl stop "${svc}.service" || log_warn "Failed to stop ${svc}"
     fi
-    if systemctl is-enabled --quiet "${svc}.service"; then
+    if systemctl is-active --quiet "${svc}.service" 2>/dev/null; then
       log_info "Disabling service: ${svc}.service"
       systemctl disable "${svc}.service" || log_warn "Failed to disable ${svc}"
     fi
@@ -175,15 +175,49 @@ if [[ -n "${DASHBOARD_DIR:-}" && -d "$DASHBOARD_DIR" && "$DASHBOARD_DIR" != "/" 
 fi
 
 # Kill any lingering processes (best-effort)
-remaining_processes="$(ps aux | grep -iE "(wifi.*dashboard|traffic.*gen)" | grep -v grep || true)"
-if [[ -n "$remaining_processes" ]]; then
+# Build a PID list safely:
+# - Match likely dashboard/test processes
+# - Exclude the installer/this script so we don't nuke ourselves
+# - Exclude our own PID and parent PID
+mapfile -t KILL_PIDS < <(
+  ps -eo pid=,args= \
+  | awk '
+      BEGIN{IGNORECASE=1}
+      # Positive matches
+      /(wifi-(good|bad)\b|wifi-dashboard\b|traffic-(eth0|wlan0|wlan1|lo)\b|traffic-.*(gen|generator))/ &&
+      # Negative matches: don’t kill the installer or this script
+      !/wifi-dashboard-install/ && !/install\.sh/ && !/02-cleanup\.sh/ {
+        print $1
+      }' \
+  | sort -u
+)
+
+# Filter out our own shell and parent just in case
+SAFE_PIDS=()
+for pid in "${KILL_PIDS[@]}"; do
+  [[ -z "$pid" ]] && continue
+  if [[ "$pid" -ne $$ && "$pid" -ne $PPID ]]; then
+    SAFE_PIDS+=("$pid")
+  fi
+done
+
+if (( ${#SAFE_PIDS[@]} > 0 )); then
   log_warn "Some dashboard-related processes may still be running; attempting to terminate:"
-  echo "$remaining_processes" | awk '{print $2}' | xargs -r kill -TERM || true
+  # Graceful first
+  for pid in "${SAFE_PIDS[@]}"; do
+    kill -TERM "$pid" 2>/dev/null || true
+  end
   sleep 1
-  echo "$remaining_processes" | awk '{print $2}' | xargs -r kill -KILL || true
+  # Forceful if needed
+  for pid in "${SAFE_PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
 else
-  log_info "✓ All dashboard processes terminated"
+  log_info "✓ No lingering dashboard processes found"
 fi
+
 
 log_info "✓ Comprehensive cleanup completed successfully"
 log_info "System is ready for fresh dashboard installation"
