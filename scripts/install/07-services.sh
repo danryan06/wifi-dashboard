@@ -64,10 +64,9 @@ Group=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
 Environment=PYTHONUNBUFFERED=1
 Environment=FLASK_ENV=production
-# Prefer gunicorn if available; otherwise fall back to python app.py
-ExecStart=/bin/bash -lc 'if command -v gunicorn >/dev/null 2>&1; then exec /usr/bin/python3 -m gunicorn -w 2 -b 0.0.0.0:5000 app:app; else exec /usr/bin/python3 ${DASHBOARD_DIR}/app.py; fi'
+ExecStart=/usr/bin/python3 ${DASHBOARD_DIR}/app.py
 Restart=always
-RestartSec=5
+RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
@@ -79,20 +78,19 @@ EOF
 log_info "Creating wired-test.service..."
 cat > /etc/systemd/system/wired-test.service <<EOF
 [Unit]
-Description=Wired Network Test Client
+Description=Wired Network Test Client with Integrated Heavy Traffic
 After=network-online.target NetworkManager.service
 Wants=network-online.target
-Requires=NetworkManager.service
 
 [Service]
 Type=simple
 User=${PI_USER}
 Group=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
-Environment=HOSTNAME=${WIRED_HOSTNAME}
+Environment=HOSTNAME=CNXNMist-Wired
 Environment=INTERFACE=${WIRED_IFACE}
 Environment=WIRED_INTERFACE=${WIRED_IFACE}
-ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/wired_simulation.sh
+ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/wired_simulation.sh
 Restart=always
 RestartSec=15
 StandardOutput=journal
@@ -102,29 +100,26 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# ---------- wifi-good.service ----------
+# ---------- wifi-good.service ---------- 
 log_info "Creating wifi-good.service for interface: ${GOOD_IFACE}..."
 cat > /etc/systemd/system/wifi-good.service <<EOF
 [Unit]
-Description=Wi-Fi Good Client (auth + integrated traffic) on ${GOOD_IFACE}
+Description=Wi-Fi Good Client with Integrated Traffic on ${GOOD_IFACE}
 After=network-online.target NetworkManager.service
 Wants=network-online.target
-Requires=NetworkManager.service
 
 [Service]
 Type=simple
 User=${PI_USER}
 Group=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
-Environment=HOSTNAME=${WIFI_GOOD_HOSTNAME}
+Environment=HOSTNAME=CNXNMist-WiFiGood
 Environment=INTERFACE=${GOOD_IFACE}
 Environment=WIFI_GOOD_INTERFACE=${GOOD_IFACE}
-# Wait for the device to be connected + have an IPv4 address
-ExecStartPre=/bin/bash -lc "timeout 90 bash -c 'until nmcli -t -f DEVICE,STATE dev status | grep -q \"^${GOOD_IFACE}:connected\$\"; do echo \"Waiting for ${GOOD_IFACE} connection...\"; sleep 5; done'"
-ExecStartPre=/bin/bash -lc "timeout 60 bash -c 'until ip -4 addr show ${GOOD_IFACE} | grep -q \"inet \"; do echo \"Waiting for ${GOOD_IFACE} IP address...\"; sleep 3; done'"
-ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/connect_and_curl.sh
+ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/connect_and_curl.sh
 Restart=always
-RestartSec=15
+RestartSec=20
+TimeoutStartSec=60
 StandardOutput=journal
 StandardError=journal
 
@@ -133,28 +128,26 @@ WantedBy=multi-user.target
 EOF
 
 # ---------- wifi-bad.service (optional) ----------
-if [[ -n "${BAD_IFACE:-}" && "${BAD_IFACE}" != "disabled" ]]; then
-  log_info "Creating wifi-bad.service for interface: ${BAD_IFACE}..."
-  cat > /etc/systemd/system/wifi-bad.service <<EOF
+if [[ -n "${BAD_IFACE:-}" && "${BAD_IFACE}" != "disabled" && "${BAD_IFACE}" != "none" ]]; then
+    log_info "Creating wifi-bad.service for interface: ${BAD_IFACE}..."
+    cat > /etc/systemd/system/wifi-bad.service <<EOF
 [Unit]
-Description=Wi-Fi Bad Client (auth failures + minimal traffic) on ${BAD_IFACE}
+Description=Wi-Fi Bad Client (auth failures) on ${BAD_IFACE}
 After=network-online.target NetworkManager.service
 Wants=network-online.target
-Requires=NetworkManager.service
 
 [Service]
 Type=simple
 User=${PI_USER}
 Group=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
-Environment=HOSTNAME=${WIFI_BAD_HOSTNAME}
+Environment=HOSTNAME=CNXNMist-WiFiBad
 Environment=INTERFACE=${BAD_IFACE}
 Environment=WIFI_BAD_INTERFACE=${BAD_IFACE}
-# Just ensure the interface exists; bad client intentionally fails auth
-ExecStartPre=/bin/bash -lc "timeout 30 bash -c 'until ip link show ${BAD_IFACE} >/dev/null 2>&1; do echo \"Waiting for ${BAD_IFACE} interface...\"; sleep 2; done'"
-ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/fail_auth_loop.sh
+ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/fail_auth_loop.sh
 Restart=always
 RestartSec=25
+TimeoutStartSec=45
 StandardOutput=journal
 StandardError=journal
 
@@ -162,19 +155,19 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 else
-  log_warn "BAD_IFACE is empty or 'disabled' — skipping wifi-bad.service creation."
+    log_warn "BAD_IFACE is empty or disabled — skipping wifi-bad.service creation."
 fi
 
-# ---------- enable services (do not force-start Wi-Fi clients here) ----------
-log_info "Enabling services (but not starting until conditions are met)..."
+# Enable services
+log_info "Enabling services..."
 systemctl daemon-reload
 
-systemctl enable wifi-dashboard >/dev/null 2>&1 && log_info "✓ Enabled wifi-dashboard.service" || log_warn "wifi-dashboard.service enable skipped/failed"
-systemctl enable wired-test     >/dev/null 2>&1 && log_info "✓ Enabled wired-test.service"     || log_warn "wired-test.service enable skipped/failed"
-systemctl enable wifi-good      >/dev/null 2>&1 && log_info "✓ Enabled wifi-good.service"      || log_warn "wifi-good.service enable skipped/failed"
+systemctl enable wifi-dashboard >/dev/null 2>&1 && log_info "✓ Enabled wifi-dashboard.service" || log_warn "Failed to enable wifi-dashboard.service"
+systemctl enable wired-test >/dev/null 2>&1 && log_info "✓ Enabled wired-test.service" || log_warn "Failed to enable wired-test.service"
+systemctl enable wifi-good >/dev/null 2>&1 && log_info "✓ Enabled wifi-good.service" || log_warn "Failed to enable wifi-good.service"
 
 if [[ -f /etc/systemd/system/wifi-bad.service ]]; then
-  systemctl enable wifi-bad    >/dev/null 2>&1 && log_info "✓ Enabled wifi-bad.service"       || log_warn "wifi-bad.service enable skipped/failed"
+    systemctl enable wifi-bad >/dev/null 2>&1 && log_info "✓ Enabled wifi-bad.service" || log_warn "Failed to enable wifi-bad.service"
 fi
 
-log_info "Service creation complete."
+log_info "Service creation completed."
