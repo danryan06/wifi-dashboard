@@ -206,7 +206,7 @@ if (( ${#SAFE_PIDS[@]} > 0 )); then
   # Graceful first
   for pid in "${SAFE_PIDS[@]}"; do
     kill -TERM "$pid" 2>/dev/null || true
-  end
+  done
   sleep 1
   # Forceful if needed
   for pid in "${SAFE_PIDS[@]}"; do
