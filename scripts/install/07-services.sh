@@ -2,6 +2,24 @@
 # Fixed: Service creation with proper network dependencies and interface assignment
 set -euo pipefail
 
+# --- defaults (must exist under `set -u`) ---
+: "${PI_USER:=pi}"
+: "${PI_HOME:=/home/${PI_USER}}"
+
+DASHBOARD_DIR="${PI_HOME}/wifi_test_dashboard"
+
+# Optional: load settings if present (hostnames, etc.)
+if [[ -f "$DASHBOARD_DIR/configs/settings.conf" ]]; then
+  # shellcheck disable=SC1090
+  source "$DASHBOARD_DIR/configs/settings.conf"
+fi
+
+# Final fallbacks for hostnames (used by services)
+: "${WIRED_HOSTNAME:=CNXNMist-Wired}"
+: "${WIFI_GOOD_HOSTNAME:=CNXNMist-WiFiGood}"
+: "${WIFI_BAD_HOSTNAME:=CNXNMist-WiFiBad}"
+# --- end defaults ---
+
 log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
 log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
 log_error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; }
@@ -65,7 +83,7 @@ Type=simple
 User=$PI_USER
 WorkingDirectory=$DASHBOARD_DIR
 Environment=INTERFACE=eth0
-Environment=HOSTNAME=$WIRED_HOSTNAME
+Environment=HOSTNAME=${WIRED_HOSTNAME:-CNXNMist-Wired}
 ExecStart=/bin/bash $DASHBOARD_DIR/scripts/traffic/wired_simulation.sh
 Restart=on-failure
 RestartSec=15
@@ -95,7 +113,7 @@ Type=simple
 User=$PI_USER
 WorkingDirectory=$DASHBOARD_DIR
 Environment=INTERFACE=$WIFI_GOOD_INTERFACE
-Environment=HOSTNAME=$WIFI_GOOD_HOSTNAME
+Environment=HOSTNAME=${WIFI_GOOD_HOSTNAME:-CNXNMist-WiFiGood}
 ExecStart=/bin/bash $DASHBOARD_DIR/scripts/traffic/connect_and_curl.sh
 Restart=on-failure
 RestartSec=20
@@ -126,7 +144,7 @@ Type=simple
 User=$PI_USER
 WorkingDirectory=$DASHBOARD_DIR
 Environment=INTERFACE=$WIFI_BAD_INTERFACE
-Environment=HOSTNAME=$WIFI_BAD_HOSTNAME
+Environment=HOSTNAME=${WIFI_BAD_HOSTNAME:-CNXNMist-WiFiBad}
 ExecStart=/bin/bash $DASHBOARD_DIR/scripts/traffic/fail_auth_loop.sh
 Restart=on-failure
 RestartSec=25
