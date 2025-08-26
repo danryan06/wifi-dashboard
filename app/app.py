@@ -166,34 +166,52 @@ def get_network_stats():
     return stats
 
 def calculate_throughput():
-    """Calculate throughput based on network stats"""
+    """Calculate throughput based on /proc/net/dev deltas and integrated service status."""
     global last_stats, last_stats_time
-    
+
     current_stats = get_network_stats()
     current_time = time.time()
-    
     throughput = {}
-    
+
+    # Build iface -> service map from assignments (integrated design)
+    try:
+        a = get_interface_assignments()
+        service_map = {
+            a.get('wired_interface', 'eth0'): 'wired-test',
+            a.get('good_interface',  'wlan0'): 'wifi-good',
+        }
+        bad_iface = a.get('bad_interface')
+        if bad_iface:
+            service_map[bad_iface] = 'wifi-bad'
+    except Exception:
+        service_map = {}
+
     if last_stats and (current_time - last_stats_time) > 0:
         time_diff = current_time - last_stats_time
-        
+
         for iface in current_stats:
             if iface in last_stats:
                 current = current_stats[iface]
                 previous = last_stats[iface]
-                
-                # Calculate bytes per second
+
+                # bytes/sec
                 rx_rate = max(0, (current['rx_bytes'] - previous['rx_bytes']) / time_diff)
                 tx_rate = max(0, (current['tx_bytes'] - previous['tx_bytes']) / time_diff)
-                
-                # Check if traffic service is active
+
+                # integrated service active?
                 try:
-                    result = subprocess.run(['systemctl', 'is-active', f'traffic-{iface}.service'], 
-                                          capture_output=True, text=True, timeout=2)
-                    is_active = result.stdout.strip() == 'active'
-                except:
+                    svc = service_map.get(iface, '')
+                    if svc:
+                        result = subprocess.run(
+                            ['systemctl', 'is-active', f'{svc}.service'],
+                            capture_output=True, text=True, timeout=2
+                        )
+                        is_active = (result.stdout.strip() == 'active')
+                    else:
+                        is_active = False
+                except Exception:
                     is_active = False
-                
+
                 throughput[iface] = {
                     'download': rx_rate,
                     'upload': tx_rate,
@@ -201,12 +219,13 @@ def calculate_throughput():
                     'rx_packets': current['rx_packets'] - previous['rx_packets'],
                     'tx_packets': current['tx_packets'] - previous['tx_packets']
                 }
-    
-    # Update last stats
+
+    # Update last stats snapshot
     last_stats = current_stats
     last_stats_time = current_time
-    
+
     return throughput
+
 
 def get_system_info():
     """Get system information"""
@@ -271,42 +290,45 @@ def get_service_status():
     return status
 
 def get_interface_assignments():
-    """Read and return interface assignment information"""
+    """Read and return interface assignment information (supports lower/upper-case keys)"""
     assignments_file = os.path.join(BASE_DIR, "configs", "interface-assignments.conf")
     assignments = {
         'good_interface': 'wlan0',
         'good_type': 'unknown',
-        'bad_interface': 'wlan1', 
+        'bad_interface': 'wlan1',
         'bad_type': 'unknown',
+        'wired_interface': 'eth0',
         'auto_detected': False
     }
-    
+
     try:
         if os.path.exists(assignments_file):
             with open(assignments_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('#') or '=' not in line:
+                for raw in f:
+                    line = raw.strip()
+                    if not line or line.startswith('#') or '=' not in line:
                         continue
-                    
-                    key, value = line.split('=', 1)
-                    key = key.strip()
-                    value = value.strip()
-                    
-                    if key == 'WIFI_GOOD_INTERFACE':
+                    key, value = [s.strip() for s in line.split('=', 1)]
+                    value = value.strip('"\'')
+                    k = key.lower()
+
+                    if k in ('wifi_good_interface', 'good_interface'):
                         assignments['good_interface'] = value
-                    elif key == 'WIFI_GOOD_INTERFACE_TYPE':
+                    elif k in ('wifi_good_interface_type', 'good_type'):
                         assignments['good_type'] = value
-                    elif key == 'WIFI_BAD_INTERFACE':
-                        assignments['bad_interface'] = value if value != 'none' else None
-                    elif key == 'WIFI_BAD_INTERFACE_TYPE':
+                    elif k in ('wifi_bad_interface', 'bad_interface'):
+                        assignments['bad_interface'] = None if value in ('none', 'disabled', '') else value
+                    elif k in ('wifi_bad_interface_type', 'bad_type'):
                         assignments['bad_type'] = value
-            
+                    elif k in ('wired_interface',):
+                        assignments['wired_interface'] = value
+
             assignments['auto_detected'] = True
     except Exception as e:
         logger.error(f"Error reading interface assignments: {e}")
-    
+
     return assignments
+
 
 def get_interface_capabilities():
     """Get detailed interface capabilities and status"""
@@ -584,110 +606,123 @@ def traffic_control():
 
 @app.route("/traffic_status")
 def traffic_status():
-    """API endpoint for integrated client services status"""
+    """API endpoint for traffic generation status (integrated services)."""
     try:
-        # Show integrated client services instead of separate traffic services
-        client_services = [
-            ('wired-test', 'eth0', 'Wired Client with Integrated Heavy Traffic'),
-            ('wifi-good', 'wlan0', 'Wi-Fi Good Client with Integrated Medium Traffic'),
-            ('wifi-bad', 'wlan1', 'Wi-Fi Bad Client (Auth Failures for Mist PCAP)')
+        a = get_interface_assignments()
+        # Build (service, iface, description, log_file)
+        items = [
+            ('wired-test', a.get('wired_interface', 'eth0'),
+             'Wired Client with Integrated Heavy Traffic', 'wired.log'),
+            ('wifi-good',  a.get('good_interface',  'wlan0'),
+             'Wi-Fi Good Client with Integrated Medium Traffic', 'wifi-good.log'),
         ]
-        
+        if a.get('bad_interface'):
+            items.append(
+                ('wifi-bad', a['bad_interface'],
+                 'Wi-Fi Bad Client (Auth Failures for Mist PCAP)', 'wifi-bad.log')
+            )
+
         traffic_status_data = {}
-        
-        for service, interface, description in client_services:
+
+        for service_name, interface, description, log_file in items:
             try:
-                # Check service status
-                result = subprocess.run(['systemctl', 'is-active', f'{service}.service'], 
-                                      capture_output=True, text=True, timeout=5)
+                # Service status
+                result = subprocess.run(
+                    ['systemctl', 'is-active', f'{service_name}.service'],
+                    capture_output=True, text=True, timeout=5
+                )
                 status = result.stdout.strip()
-                
-                # Get interface info
-                ip_result = subprocess.run(['ip', 'addr', 'show', interface], 
-                                         capture_output=True, text=True, timeout=5)
+
+                # IP info
+                ip_result = subprocess.run(
+                    ['ip', 'addr', 'show', interface],
+                    capture_output=True, text=True, timeout=5
+                )
                 ip_info = "Not available"
                 if ip_result.returncode == 0:
-                    for line in ip_result.stdout.splitlines():
-                        if 'inet ' in line and not '127.0.0.1' in line:
-                            ip_info = line.strip().split()[1]
+                    # naive parse: first 'inet ' line
+                    for ln in ip_result.stdout.splitlines():
+                        ln = ln.strip()
+                        if ln.startswith('inet '):
+                            ip_info = ln.split()[1]  # e.g., "192.168.1.111/24"
                             break
-                
-                # Get recent log entries from the integrated service
-                log_file_map = {
-                    'wired-test': 'wired.log',
-                    'wifi-good': 'wifi-good.log', 
-                    'wifi-bad': 'wifi-bad.log'
-                }
-                log_file = log_file_map.get(service, f'{service}.log')
-                recent_logs = read_log_file(log_file, 5) if os.path.exists(os.path.join(LOG_DIR, log_file)) else []
-                
+
+                # Recent logs (last 20 lines) + file info
+                recent = read_log_file(log_file, lines=20)
+                info = get_log_file_info(log_file)
+                exists = bool(info.get('exists'))
+
                 traffic_status_data[interface] = {
+                    'service_name': service_name,
                     'service_status': status,
-                    'ip_address': ip_info,
-                    'recent_logs': recent_logs,
-                    'log_file_exists': os.path.exists(os.path.join(LOG_DIR, log_file)),
                     'description': description,
-                    'service_name': service  # Add service name for reference
+                    'ip_address': ip_info,
+                    'recent_logs': recent,
+                    'log_file_exists': exists
                 }
-                
+
             except Exception as e:
                 traffic_status_data[interface] = {
+                    'service_name': service_name,
                     'service_status': f'error: {e}',
+                    'description': description,
                     'ip_address': 'unknown',
                     'recent_logs': [],
-                    'log_file_exists': False,
-                    'description': description,
-                    'service_name': service
+                    'log_file_exists': False
                 }
-        
-        return jsonify({
-            "interfaces": traffic_status_data,
-            "success": True,
-            "architecture": "integrated"  # Indicate this is integrated architecture
-        })
+
+        return jsonify({"interfaces": traffic_status_data, "success": True})
     except Exception as e:
         logger.error(f"Error in traffic_status endpoint: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/traffic_action", methods=["POST"])
 def traffic_action():
-    """Start/stop/restart integrated client services"""
+    """Start/stop/restart integrated traffic/client services based on assigned interfaces."""
     try:
         interface = request.form.get("interface")
         action = request.form.get("action")
-        
+
         if not interface or not action:
             return jsonify({"success": False, "error": "Missing interface or action"}), 400
-        
-        if interface not in ['eth0', 'wlan0', 'wlan1']:
-            return jsonify({"success": False, "error": "Invalid interface"}), 400
-        
         if action not in ['start', 'stop', 'restart']:
             return jsonify({"success": False, "error": "Invalid action"}), 400
-        
-        # Map interfaces to integrated service names
+
+        # Build valid iface set + iface->service map from assignments
+        a = get_interface_assignments()
+        valid_ifaces = {a.get('wired_interface', 'eth0'), a.get('good_interface', 'wlan0')}
+        if a.get('bad_interface'):
+            valid_ifaces.add(a['bad_interface'])
+
+        if interface not in valid_ifaces:
+            return jsonify({"success": False, "error": "Invalid interface"}), 400
+
         service_map = {
-            'eth0': 'wired-test',
-            'wlan0': 'wifi-good', 
-            'wlan1': 'wifi-bad'
+            a.get('wired_interface', 'eth0'): 'wired-test',
+            a.get('good_interface',  'wlan0'): 'wifi-good',
         }
-        
+        if a.get('bad_interface'):
+            service_map[a['bad_interface']] = 'wifi-bad'
+
         service_name = service_map.get(interface)
         if not service_name:
-            return jsonify({"success": False, "error": f"No service mapped for interface {interface}"}), 400
-        
-        result = subprocess.run(['sudo', 'systemctl', action, f'{service_name}.service'], 
-                              capture_output=True, text=True, timeout=15)
-        
+            return jsonify({"success": False, "error": "No service mapped for interface"}), 400
+
+        # Non-blocking control so UI stays responsive if service has ExecStartPre waits
+        result = subprocess.run(
+            ['sudo', 'systemctl', action, '--no-block', f'{service_name}.service'],
+            capture_output=True, text=True, timeout=10
+        )
+
         if result.returncode == 0:
-            log_action(f"Integrated service {service_name} {action}ed via UI (interface: {interface})")
-            return jsonify({"success": True, "message": f"Integrated service {service_name} {action}ed successfully"})
+            log_action(f"Service {service_name} {action} via UI (iface={interface})")
+            return jsonify({"success": True, "message": f"{service_name} {action} issued"})
         else:
-            logger.error(f"Failed to {action} service {service_name}: {result.stderr}")
-            return jsonify({"success": False, "error": f"Failed to {action} service: {result.stderr}"}), 500
-            
+            logger.error(f"Failed to {action} {service_name}: {result.stderr}")
+            return jsonify({"success": False, "error": f"Failed to {action} {service_name}: {result.stderr}"}), 500
+
     except Exception as e:
-        logger.error(f"Error with traffic action: {e}")
+        logger.error(f"Error with traffic_action: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/update_wifi", methods=["POST"])
@@ -696,63 +731,66 @@ def update_wifi():
     try:
         new_ssid = request.form.get("ssid", "").strip()
         new_password = request.form.get("password", "").strip()
-        
+
         if not new_ssid or not new_password:
             flash("Both SSID and password are required", "error")
             return redirect("/")
-        
+
         if write_config(new_ssid, new_password):
             log_action(f"Wi-Fi config updated via UI: SSID={new_ssid}")
             flash("Wi-Fi configuration updated successfully", "success")
-            
-            # Restart Wi-Fi services to pick up new config
+
+            # Non-blocking restarts so the UI won't time out on ExecStartPre waits
             try:
-                subprocess.run(['sudo', 'systemctl', 'restart', 'wifi-good.service'], timeout=10)
-                subprocess.run(['sudo', 'systemctl', 'restart', 'wifi-bad.service'], timeout=10)
-                flash("Wi-Fi services restarted", "info")
+                subprocess.run(['sudo', 'systemctl', 'restart', '--no-block', 'wifi-good.service'])
+                subprocess.run(['sudo', 'systemctl', 'restart', '--no-block', 'wifi-bad.service'])
+                flash("Wi-Fi services restarting in the background…", "info")
             except Exception as e:
                 logger.error(f"Error restarting services: {e}")
                 flash("Configuration saved but failed to restart services", "warning")
         else:
             flash("Failed to update configuration", "error")
-            
+
     except Exception as e:
         logger.error(f"Error updating Wi-Fi config: {e}")
         flash(f"Error updating configuration: {e}", "error")
-    
+
     return redirect("/")
+
 
 @app.route("/set_netem", methods=["POST"])
 def set_netem():
-    """Configure network emulation"""
+    """Configure network emulation on the GOOD client interface"""
     try:
+        a = get_interface_assignments()
+        good_iface = a.get('good_interface') or 'wlan0'
+
         latency = request.form.get("latency", "0")
         loss = request.form.get("loss", "0")
-        
-        # Remove existing netem
-        subprocess.run(["sudo", "tc", "qdisc", "del", "dev", "wlan0", "root"], 
-                      stderr=subprocess.DEVNULL, timeout=10)
-        
-        cmd = ["sudo", "tc", "qdisc", "add", "dev", "wlan0", "root", "netem"]
-        
+
+        # Remove existing netem safely
+        subprocess.run(["sudo", "tc", "qdisc", "del", "dev", good_iface, "root"],
+                       stderr=subprocess.DEVNULL, timeout=10)
+
+        cmd = ["sudo", "tc", "qdisc", "add", "dev", good_iface, "root", "netem"]
         if int(latency) > 0:
             cmd.extend(["delay", f"{latency}ms"])
         if float(loss) > 0:
             cmd.extend(["loss", f"{loss}%"])
-        
+
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        
         if result.returncode == 0:
-            log_action(f"Applied netem: latency={latency}ms, loss={loss}%")
-            flash(f"Network emulation applied: {latency}ms latency, {loss}% loss", "success")
+            log_action(f"Applied netem on {good_iface}: latency={latency}ms, loss={loss}%")
+            flash(f"Network emulation applied on {good_iface}: {latency}ms latency, {loss}% loss", "success")
         else:
             flash(f"Failed to apply network emulation: {result.stderr}", "error")
-            
+
     except Exception as e:
         logger.error(f"Error setting netem: {e}")
         flash(f"Error configuring network emulation: {e}", "error")
-    
+
     return redirect("/")
+
 
 @app.route("/service_action", methods=["POST"])
 def service_action():
