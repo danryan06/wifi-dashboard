@@ -91,6 +91,7 @@ Group=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
 Environment=HOSTNAME=${WIRED_HOSTNAME}
 Environment=INTERFACE=${WIRED_IFACE}
+Environment=WIRED_INTERFACE=${WIRED_IFACE}
 ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/wired_simulation.sh
 Restart=always
 RestartSec=15
@@ -117,6 +118,7 @@ Group=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
 Environment=HOSTNAME=${WIFI_GOOD_HOSTNAME}
 Environment=INTERFACE=${GOOD_IFACE}
+Environment=WIFI_GOOD_INTERFACE=${GOOD_IFACE}
 # Wait for the device to be connected + have an IPv4 address
 ExecStartPre=/bin/bash -lc "timeout 90 bash -c 'until nmcli -t -f DEVICE,STATE dev status | grep -q \"^${GOOD_IFACE}:connected\$\"; do echo \"Waiting for ${GOOD_IFACE} connection...\"; sleep 5; done'"
 ExecStartPre=/bin/bash -lc "timeout 60 bash -c 'until ip -4 addr show ${GOOD_IFACE} | grep -q \"inet \"; do echo \"Waiting for ${GOOD_IFACE} IP address...\"; sleep 3; done'"
@@ -147,6 +149,7 @@ Group=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
 Environment=HOSTNAME=${WIFI_BAD_HOSTNAME}
 Environment=INTERFACE=${BAD_IFACE}
+Environment=WIFI_BAD_INTERFACE=${BAD_IFACE}
 # Just ensure the interface exists; bad client intentionally fails auth
 ExecStartPre=/bin/bash -lc "timeout 30 bash -c 'until ip link show ${BAD_IFACE} >/dev/null 2>&1; do echo \"Waiting for ${BAD_IFACE} interface...\"; sleep 2; done'"
 ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/fail_auth_loop.sh

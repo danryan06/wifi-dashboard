@@ -5,7 +5,7 @@ set -euo pipefail
 # Complete good client behavior: Authentication + Connection + Roaming + Realistic Traffic Generation
 # This represents a real user's device that successfully connects and roams between APs
 
-INTERFACE="wlan0"
+INTERFACE="${INTERFACE:=wlan0}"
 HOSTNAME="CNXNMist-WiFiGood"
 LOG_FILE="/home/pi/wifi_test_dashboard/logs/wifi-good.log"
 CONFIG_FILE="/home/pi/wifi_test_dashboard/configs/ssid.conf"

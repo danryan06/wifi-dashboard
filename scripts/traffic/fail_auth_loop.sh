@@ -5,7 +5,7 @@ set -euo pipefail
 # Just uses wrong password to trigger Mist automatic PCAP capture
 # Keeps it simple for demonstration purposes
 
-INTERFACE="wlan1"
+INTERFACE="${INTERFACE:=wlan1}"     
 HOSTNAME="CNXNMist-WiFiBad"
 LOG_FILE="/home/pi/wifi_test_dashboard/logs/wifi-bad.log"
 CONFIG_FILE="/home/pi/wifi_test_dashboard/configs/ssid.conf"
