@@ -1,226 +1,177 @@
 #!/usr/bin/env bash
-# Fixed: Service creation with proper network dependencies and interface assignment
+# 07-services.sh — Create/enable systemd services with proper deps and interface assignments
 set -euo pipefail
 
-# --- defaults (must exist under `set -u`) ---
+# ---------- logging helpers ----------
+log_info()  { echo -e "\033[0;32m[INFO]\033[0m $*"; }
+log_warn()  { echo -e "\033[1;33m[WARN]\033[0m $*"; }
+log_error() { echo -e "\033[0;31m[ERROR]\033[0m $*" >&2; }
+
+# ---------- defaults (safe under set -u) ----------
 : "${PI_USER:=pi}"
 : "${PI_HOME:=/home/${PI_USER}}"
-
 DASHBOARD_DIR="${PI_HOME}/wifi_test_dashboard"
 
-# Optional: load settings if present (hostnames, etc.)
+# Optional settings (hostnames, etc.)
 if [[ -f "$DASHBOARD_DIR/configs/settings.conf" ]]; then
   # shellcheck disable=SC1090
   source "$DASHBOARD_DIR/configs/settings.conf"
 fi
-
-# Final fallbacks for hostnames (used by services)
 : "${WIRED_HOSTNAME:=CNXNMist-Wired}"
 : "${WIFI_GOOD_HOSTNAME:=CNXNMist-WiFiGood}"
 : "${WIFI_BAD_HOSTNAME:=CNXNMist-WiFiBad}"
-# --- end defaults ---
 
-log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
-log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
-log_error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; }
+# ---------- ensure interface assignments exist ----------
+CONF="$DASHBOARD_DIR/configs/interface-assignments.conf"
+
+if [[ ! -f "$CONF" ]]; then
+  if [[ -x "$DASHBOARD_DIR/scripts/install/04.5-auto-interface-assignment.sh" ]]; then
+    bash "$DASHBOARD_DIR/scripts/install/04.5-auto-interface-assignment.sh" || true
+  fi
+fi
+
+if [[ ! -f "$CONF" ]]; then
+  mkdir -p "$DASHBOARD_DIR/configs"
+  cat >"$CONF" <<'EOF'
+good_interface="wlan0"
+bad_interface="wlan1"
+wired_interface="eth0"
+EOF
+fi
+
+# Load once and normalize
+# shellcheck disable=SC1090
+source "$CONF"
+GOOD_IFACE="${good_interface:-wlan0}"
+BAD_IFACE="${bad_interface:-wlan1}"
+WIRED_IFACE="${wired_interface:-eth0}"
 
 log_info "Creating systemd services with enhanced network dependencies..."
+log_info "Interface assignments: good=${GOOD_IFACE}, bad=${BAD_IFACE}, wired=${WIRED_IFACE}"
 
-# Source interface assignments (created in early assignment phase)
-DASHBOARD_DIR="$PI_HOME/wifi_test_dashboard"
-if [[ -f "$DASHBOARD_DIR/configs/interface-assignments.conf" ]]; then
-    source "$DASHBOARD_DIR/configs/interface-assignments.conf"
-    log_info "Loaded interface assignments: good=$WIFI_GOOD_INTERFACE, bad=$WIFI_BAD_INTERFACE"
-else
-    log_warn "Interface assignments not found, using defaults"
-    WIFI_GOOD_INTERFACE="wlan0"
-    WIFI_BAD_INTERFACE="wlan1"
-fi
-
-# 1. Wi-Fi Dashboard Service
+# ---------- wifi-dashboard.service ----------
 log_info "Creating wifi-dashboard.service..."
-cat > /etc/systemd/system/wifi-dashboard.service << EOF
+cat > /etc/systemd/system/wifi-dashboard.service <<EOF
 [Unit]
 Description=Wi-Fi Test Dashboard Web Interface
-After=multi-user.target NetworkManager.service
-Wants=NetworkManager.service
-StartLimitIntervalSec=300
-StartLimitBurst=3
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=$PI_USER
-WorkingDirectory=$DASHBOARD_DIR
-Environment=PYTHONPATH=$DASHBOARD_DIR
-Environment=FLASK_APP=app.py
-ExecStart=/usr/bin/python3 $DASHBOARD_DIR/app.py
-Restart=on-failure
-RestartSec=10
-StandardOutput=append:$DASHBOARD_DIR/logs/dashboard.log
-StandardError=append:$DASHBOARD_DIR/logs/dashboard.log
-
-# Security settings
-NoNewPrivileges=true
-PrivateTmp=true
+User=${PI_USER}
+Group=${PI_USER}
+WorkingDirectory=${DASHBOARD_DIR}
+Environment=PYTHONUNBUFFERED=1
+Environment=FLASK_ENV=production
+# Prefer gunicorn if available; otherwise fall back to python app.py
+ExecStart=/bin/bash -lc 'if command -v gunicorn >/dev/null 2>&1; then exec /usr/bin/python3 -m gunicorn -w 2 -b 0.0.0.0:5000 app:app; else exec /usr/bin/python3 ${DASHBOARD_DIR}/app.py; fi'
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# 2. Wired Test Service (eth0)
+# ---------- wired-test.service ----------
 log_info "Creating wired-test.service..."
-cat > /etc/systemd/system/wired-test.service << EOF
+cat > /etc/systemd/system/wired-test.service <<EOF
 [Unit]
-Description=Wired Network Client Simulation (eth0)
-After=NetworkManager.service network-online.target
-Wants=NetworkManager.service network-online.target
-Requires=network-online.target
-StartLimitIntervalSec=300
-StartLimitBurst=3
+Description=Wired Network Test Client
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+Requires=NetworkManager.service
 
 [Service]
 Type=simple
-User=$PI_USER
-WorkingDirectory=$DASHBOARD_DIR
-Environment=INTERFACE=eth0
-Environment=HOSTNAME=${WIRED_HOSTNAME:-CNXNMist-Wired}
-ExecStart=/bin/bash $DASHBOARD_DIR/scripts/traffic/wired_simulation.sh
-Restart=on-failure
+User=${PI_USER}
+Group=${PI_USER}
+WorkingDirectory=${DASHBOARD_DIR}
+Environment=HOSTNAME=${WIRED_HOSTNAME}
+Environment=INTERFACE=${WIRED_IFACE}
+ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/wired_simulation.sh
+Restart=always
 RestartSec=15
-StandardOutput=append:$DASHBOARD_DIR/logs/wired.log
-StandardError=append:$DASHBOARD_DIR/logs/wired.log
-
-# Wait for network to be truly ready
-ExecStartPre=/bin/bash -c 'timeout 60 bash -c "until ip route | grep -q default; do sleep 2; done"'
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# 3. Wi-Fi Good Client Service
-log_info "Creating wifi-good.service for interface: $WIFI_GOOD_INTERFACE..."
-cat > /etc/systemd/system/wifi-good.service << EOF
+# ---------- wifi-good.service ----------
+log_info "Creating wifi-good.service for interface: ${GOOD_IFACE}..."
+cat > /etc/systemd/system/wifi-good.service <<EOF
 [Unit]
-Description=Wi-Fi Good Client Simulation ($WIFI_GOOD_INTERFACE)
-After=NetworkManager.service network-online.target wifi-dashboard.service
-Wants=NetworkManager.service network-online.target
-Requires=network-online.target
-StartLimitIntervalSec=300
-StartLimitBurst=3
+Description=Wi-Fi Good Client (auth + integrated traffic) on ${GOOD_IFACE}
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+Requires=NetworkManager.service
 
 [Service]
 Type=simple
-User=$PI_USER
-WorkingDirectory=$DASHBOARD_DIR
-Environment=INTERFACE=$WIFI_GOOD_INTERFACE
-Environment=HOSTNAME=${WIFI_GOOD_HOSTNAME:-CNXNMist-WiFiGood}
-ExecStart=/bin/bash $DASHBOARD_DIR/scripts/traffic/connect_and_curl.sh
-Restart=on-failure
-RestartSec=20
-StandardOutput=append:$DASHBOARD_DIR/logs/wifi-good.log
-StandardError=append:$DASHBOARD_DIR/logs/wifi-good.log
-
-# Enhanced pre-start checks for Wi-Fi
-ExecStartPre=/bin/bash -c 'timeout 90 bash -c "until nmcli device status | grep -q \"$WIFI_GOOD_INTERFACE.*connected\"; do echo \"Waiting for $WIFI_GOOD_INTERFACE connection...\"; sleep 5; done"'
-ExecStartPre=/bin/bash -c 'timeout 60 bash -c "until ip addr show $WIFI_GOOD_INTERFACE | grep -q \"inet \"; do echo \"Waiting for $WIFI_GOOD_INTERFACE IP address...\"; sleep 3; done"'
+User=${PI_USER}
+Group=${PI_USER}
+WorkingDirectory=${DASHBOARD_DIR}
+Environment=HOSTNAME=${WIFI_GOOD_HOSTNAME}
+Environment=INTERFACE=${GOOD_IFACE}
+# Wait for the device to be connected + have an IPv4 address
+ExecStartPre=/bin/bash -lc "timeout 90 bash -c 'until nmcli -t -f DEVICE,STATE dev status | grep -q \"^${GOOD_IFACE}:connected\$\"; do echo \"Waiting for ${GOOD_IFACE} connection...\"; sleep 5; done'"
+ExecStartPre=/bin/bash -lc "timeout 60 bash -c 'until ip -4 addr show ${GOOD_IFACE} | grep -q \"inet \"; do echo \"Waiting for ${GOOD_IFACE} IP address...\"; sleep 3; done'"
+ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/connect_and_curl.sh
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# 4. Wi-Fi Bad Client Service (only if second interface available)
-if [[ "$WIFI_BAD_INTERFACE" != "disabled" && -n "$WIFI_BAD_INTERFACE" ]]; then
-    log_info "Creating wifi-bad.service for interface: $WIFI_BAD_INTERFACE..."
-    cat > /etc/systemd/system/wifi-bad.service << EOF
+# ---------- wifi-bad.service (optional) ----------
+if [[ -n "${BAD_IFACE:-}" && "${BAD_IFACE}" != "disabled" ]]; then
+  log_info "Creating wifi-bad.service for interface: ${BAD_IFACE}..."
+  cat > /etc/systemd/system/wifi-bad.service <<EOF
 [Unit]
-Description=Wi-Fi Bad Client Simulation ($WIFI_BAD_INTERFACE) - Auth Failures
-After=NetworkManager.service network-online.target wifi-good.service
-Wants=NetworkManager.service network-online.target
-StartLimitIntervalSec=300
-StartLimitBurst=3
+Description=Wi-Fi Bad Client (auth failures + minimal traffic) on ${BAD_IFACE}
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+Requires=NetworkManager.service
 
 [Service]
 Type=simple
-User=$PI_USER
-WorkingDirectory=$DASHBOARD_DIR
-Environment=INTERFACE=$WIFI_BAD_INTERFACE
-Environment=HOSTNAME=${WIFI_BAD_HOSTNAME:-CNXNMist-WiFiBad}
-ExecStart=/bin/bash $DASHBOARD_DIR/scripts/traffic/fail_auth_loop.sh
-Restart=on-failure
+User=${PI_USER}
+Group=${PI_USER}
+WorkingDirectory=${DASHBOARD_DIR}
+Environment=HOSTNAME=${WIFI_BAD_HOSTNAME}
+Environment=INTERFACE=${BAD_IFACE}
+# Just ensure the interface exists; bad client intentionally fails auth
+ExecStartPre=/bin/bash -lc "timeout 30 bash -c 'until ip link show ${BAD_IFACE} >/dev/null 2>&1; do echo \"Waiting for ${BAD_IFACE} interface...\"; sleep 2; done'"
+ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/fail_auth_loop.sh
+Restart=always
 RestartSec=25
-StandardOutput=append:$DASHBOARD_DIR/logs/wifi-bad.log
-StandardError=append:$DASHBOARD_DIR/logs/wifi-bad.log
-
-# Wait for interface to be available
-ExecStartPre=/bin/bash -c 'timeout 30 bash -c "until ip link show $WIFI_BAD_INTERFACE; do echo \"Waiting for $WIFI_BAD_INTERFACE interface...\"; sleep 2; done"'
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
 else
-    log_warn "Skipping wifi-bad.service - no second Wi-Fi interface available"
+  log_warn "BAD_IFACE is empty or 'disabled' — skipping wifi-bad.service creation."
 fi
 
-# Create service management helper script
-log_info "Creating service management helper..."
-cat > "$DASHBOARD_DIR/scripts/manage_services.sh" << 'EOF'
-#!/bin/bash
-# Service management helper for Wi-Fi Dashboard
-
-SERVICES=("wifi-dashboard" "wired-test" "wifi-good")
-
-# Add wifi-bad if it exists
-if systemctl list-unit-files | grep -q "wifi-bad.service"; then
-    SERVICES+=("wifi-bad")
-fi
-
-case "${1:-status}" in
-    start)
-        echo "Starting Wi-Fi Dashboard services..."
-        for service in "${SERVICES[@]}"; do
-            echo "Starting $service..."
-            sudo systemctl start "$service.service"
-        done
-        ;;
-    stop)
-        echo "Stopping Wi-Fi Dashboard services..."
-        for service in "${SERVICES[@]}"; do
-            echo "Stopping $service..."
-            sudo systemctl stop "$service.service"
-        done
-        ;;
-    restart)
-        echo "Restarting Wi-Fi Dashboard services..."
-        for service in "${SERVICES[@]}"; do
-            echo "Restarting $service..."
-            sudo systemctl restart "$service.service"
-        done
-        ;;
-    status)
-        echo "Wi-Fi Dashboard Service Status:"
-        for service in "${SERVICES[@]}"; do
-            echo "--- $service ---"
-            sudo systemctl status "$service.service" --no-pager -l
-        done
-        ;;
-    logs)
-        echo "Viewing logs for all services..."
-        sudo journalctl -u wifi-dashboard.service -u wired-test.service -u wifi-good.service ${WIFI_BAD_INTERFACE:+-u wifi-bad.service} -f
-        ;;
-    *)
-        echo "Usage: $0 {start|stop|restart|status|logs}"
-        exit 1
-        ;;
-esac
-EOF
-
-chmod +x "$DASHBOARD_DIR/scripts/manage_services.sh"
-chown "$PI_USER:$PI_USER" "$DASHBOARD_DIR/scripts/manage_services.sh"
-
-# Reload systemd to recognize new services
+# ---------- enable services (do not force-start Wi-Fi clients here) ----------
+log_info "Enabling services (but not starting until conditions are met)..."
 systemctl daemon-reload
 
-log_info "✓ All services created with proper network dependencies"
-log_info "✓ Service management helper created: $DASHBOARD_DIR/scripts/manage_services.sh"
+systemctl enable wifi-dashboard >/dev/null 2>&1 && log_info "✓ Enabled wifi-dashboard.service" || log_warn "wifi-dashboard.service enable skipped/failed"
+systemctl enable wired-test     >/dev/null 2>&1 && log_info "✓ Enabled wired-test.service"     || log_warn "wired-test.service enable skipped/failed"
+systemctl enable wifi-good      >/dev/null 2>&1 && log_info "✓ Enabled wifi-good.service"      || log_warn "wifi-good.service enable skipped/failed"
 
-# Note: Services are not enabled/started here - that happens in 08-finalize.sh after Wi-Fi config
+if [[ -f /etc/systemd/system/wifi-bad.service ]]; then
+  systemctl enable wifi-bad    >/dev/null 2>&1 && log_info "✓ Enabled wifi-bad.service"       || log_warn "wifi-bad.service enable skipped/failed"
+fi
+
+log_info "Service creation complete."
