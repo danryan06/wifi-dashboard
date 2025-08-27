@@ -4,114 +4,98 @@
 
 set -euo pipefail
 
-# --------- Safe defaults so this script is self-contained ----------
+# --- defaults so set -u is safe ---
 : "${PI_USER:=pi}"
 : "${PI_HOME:=/home/${PI_USER}}"
-: "${VERSION:=v5.0.x}"
-DASHBOARD_DIR="${PI_HOME}/wifi_test_dashboard"
-# ------------------------------------------------------------------
+: "${VERSION:=v5.0.2}"
+
+DASHBOARD_DIR="${DASHBOARD_DIR:-${PI_HOME}/wifi_test_dashboard}"
+CONFIG_DIR="${DASHBOARD_DIR}/configs"
+LOG_DIR="${DASHBOARD_DIR}/logs"
+SCRIPTS_DIR="${DASHBOARD_DIR}/scripts"
 
 log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
+log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
 
 log_info "Creating directory structure..."
 
-# Create main directory structure
-mkdir -p "${DASHBOARD_DIR}"/{scripts,templates,configs,logs}
+# Main directories
+mkdir -p \
+  "${DASHBOARD_DIR}" \
+  "${SCRIPTS_DIR}" \
+  "${SCRIPTS_DIR}/traffic" \
+  "${SCRIPTS_DIR}/install" \
+  "${CONFIG_DIR}" \
+  "${LOG_DIR}" \
+  "${DASHBOARD_DIR}/templates"
 
-# ----------------------- settings.conf ----------------------------
-# Only create if missing (don’t overwrite user’s changes)
-SETTINGS="${DASHBOARD_DIR}/configs/settings.conf"
-if [[ ! -s "$SETTINGS" ]]; then
-  cat >"$SETTINGS" <<'EOF'
-# ================= Wi-Fi Dashboard Settings =================
+# Permissions (best-effort if run as root)
+chown -R "${PI_USER}:${PI_USER}" "${DASHBOARD_DIR}" 2>/dev/null || true
 
-# ---------- Web / refresh ----------
-LOG_LEVEL=INFO
-REFRESH_INTERVAL=30
-CURL_TIMEOUT=10
-
-# ---------- Test URLs (comma-separated) ----------
-TEST_URLS=https://www.google.com,https://www.cloudflare.com,https://www.github.com
-
-# ---------- Integrated traffic (wifi-good) ----------
-WIFI_GOOD_INTEGRATED_TRAFFIC=true
-# Traffic intensity: light | medium | heavy
-WLAN0_TRAFFIC_INTENSITY=medium
-
-# ---------- Optional traffic: speedtest & YouTube ----------
-# Installers may enable these and install packages
-WIFI_GOOD_RUN_SPEEDTEST=false
-WIFI_GOOD_SPEEDTEST_INTERVAL=900       # seconds between speedtests
-
-WIFI_GOOD_RUN_YOUTUBE=false
-WIFI_GOOD_YT_INTERVAL=1800             # seconds between yt pulls
-YT_TEST_VIDEO_URL="https://www.youtube.com/watch?v=BaW_jenozKc"
-
-# ---------- Per-interface traffic generator (if used) ----------
-ENABLE_INTERFACE_TRAFFIC=true
-ETH0_TRAFFIC_TYPE=all
-ETH0_TRAFFIC_INTENSITY=heavy
-WLAN1_TRAFFIC_TYPE=ping
-WLAN1_TRAFFIC_INTENSITY=light
-
-# ---------- Roaming controls ----------
-WIFI_ROAMING_ENABLED=true
-WIFI_ROAMING_INTERVAL=120
-WIFI_ROAMING_SCAN_INTERVAL=30
-WIFI_MIN_SIGNAL_THRESHOLD=-75
-WIFI_ROAMING_SIGNAL_DIFF=10
-# 2.4 | 5 | both
-WIFI_BAND_PREFERENCE=2.4
-
-# ---------- Hostnames (may be overridden by interface-assignments.conf) ----------
+# --- default settings.conf (only if missing/empty) ---
+SETTINGS="${CONFIG_DIR}/settings.conf"
+if [[ ! -s "${SETTINGS}" ]]; then
+  log_info "Creating default settings.conf..."
+  cat >"${SETTINGS}" <<'EOF'
+# General hostnames used by services
+WIRED_HOSTNAME="CNXNMist-Wired"
 WIFI_GOOD_HOSTNAME="CNXNMist-WiFiGood"
 WIFI_BAD_HOSTNAME="CNXNMist-WiFiBad"
 
-# ---------- Timeouts & retries ----------
-WIFI_CONNECTION_TIMEOUT=30
-WIFI_MAX_RETRY_ATTEMPTS=3
-WIFI_GOOD_REFRESH_INTERVAL=60
+# Good client behavior
+WIFI_GOOD_INTEGRATED_TRAFFIC="true"
+WLAN0_TRAFFIC_INTENSITY="medium"
+WIFI_CONNECTION_TIMEOUT="30"
+WIFI_MAX_RETRY_ATTEMPTS="3"
+WIFI_GOOD_REFRESH_INTERVAL="60"
+
+# Roaming
+WIFI_ROAMING_ENABLED="true"
+WIFI_ROAMING_INTERVAL="120"
+WIFI_ROAMING_SCAN_INTERVAL="30"
+WIFI_MIN_SIGNAL_THRESHOLD="-75"
+WIFI_ROAMING_SIGNAL_DIFF="10"
+WIFI_BAND_PREFERENCE="2.4"    # 2.4 | 5 | both
+
+# Log rotation (bytes)
+LOG_MAX_SIZE_BYTES="10485760"
 EOF
-  chown "${PI_USER}:${PI_USER}" "$SETTINGS"
-  log_info "Created default settings: $SETTINGS"
-else
-  log_info "settings.conf already present; leaving as-is"
+  chown "${PI_USER}:${PI_USER}" "${SETTINGS}" 2>/dev/null || true
 fi
 
-# ------------------------- ssid.conf ------------------------------
-SSID_CONF="${DASHBOARD_DIR}/configs/ssid.conf"
-if [[ ! -s "$SSID_CONF" ]]; then
-  cat > "$SSID_CONF" <<EOF
-TestSSID
-TestPassword
+# --- default ssid.conf (only if missing/empty) ---
+SSID_CONF="${CONFIG_DIR}/ssid.conf"
+if [[ ! -s "${SSID_CONF}" ]]; then
+  log_info "Creating placeholder ssid.conf..."
+  cat >"${SSID_CONF}" <<'EOF'
+YourSSID
+YourPassword
 EOF
-  chmod 600 "$SSID_CONF"
-  chown "${PI_USER}:${PI_USER}" "$SSID_CONF"
-  log_info "Created placeholder Wi-Fi config: $SSID_CONF"
-else
-  log_info "ssid.conf already present; leaving as-is"
+  chmod 600 "${SSID_CONF}" 2>/dev/null || true
+  chown "${PI_USER}:${PI_USER}" "${SSID_CONF}" 2>/dev/null || true
 fi
 
-# --------------------- Initialize log files -----------------------
-log_info "Initializing log files..."
-declare -a LOG_FILES=(
-  "main.log"
-  "wired.log"
-  "wifi-good.log"
-  "wifi-bad.log"
-  "traffic-eth0.log"
-)
+# --- default interface assignments (only if missing/empty) ---
+ASSIGN_CONF="${CONFIG_DIR}/interface-assignments.conf"
+if [[ ! -s "${ASSIGN_CONF}" ]]; then
+  log_info "Creating default interface-assignments.conf..."
+  cat >"${ASSIGN_CONF}" <<'EOF'
+good_interface="wlan0"
+bad_interface="wlan1"
+wired_interface="eth0"
+EOF
+  chown "${PI_USER}:${PI_USER}" "${ASSIGN_CONF}" 2>/dev/null || true
+fi
 
-for lf in "${LOG_FILES[@]}"; do
-  log_path="${DASHBOARD_DIR}/logs/${lf}"
-  # Create if missing; always append the install banner once
-  touch "$log_path"
-  echo "[$(date '+%F %T')] Install/upgrade to ${VERSION}" >> "$log_path"
-  chmod 664 "$log_path"
-  chown "${PI_USER}:${PI_USER}" "$log_path"
-done
+# main log (append a one-liner so the UI shows something immediately)
+MAIN_LOG="${LOG_DIR}/main.log"
+if [[ ! -f "${MAIN_LOG}" ]]; then
+  touch "${MAIN_LOG}"
+fi
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Install/upgrade to ${VERSION}" >> "${MAIN_LOG}"
+chown "${PI_USER}:${PI_USER}" "${MAIN_LOG}" 2>/dev/null || true
 
-# ------------------ Final ownership & perms -----------------------
-chown -R "${PI_USER}:${PI_USER}" "${DASHBOARD_DIR}"
+# make sure script files will be executable later steps
+find "${SCRIPTS_DIR}" -type f -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
 
-log_info "✓ Directory structure and configuration completed"
+log_info "✓ Directory structure and baseline configs ready"
