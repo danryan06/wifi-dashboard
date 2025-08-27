@@ -10,6 +10,49 @@ log_info "Creating directory structure..."
 
 # Create main directory structure
 mkdir -p "$PI_HOME/wifi_test_dashboard"/{scripts,templates,configs,logs}
+# --- Default settings (only create if missing/empty) ---
+if [[ ! -s "$DASHBOARD_DIR/configs/settings.conf" ]]; then
+  cat >"$DASHBOARD_DIR/configs/settings.conf" <<'EOF'
+# ===== Wi-Fi Good Client (integrated traffic) =====
+# Master switch for integrated traffic inside connect_and_curl.sh
+WIFI_GOOD_INTEGRATED_TRAFFIC=true
+
+# Speedtest controls
+WIFI_GOOD_RUN_SPEEDTEST=false
+WIFI_GOOD_SPEEDTEST_INTERVAL=900      # seconds between speedtests
+
+# YouTube traffic controls
+WIFI_GOOD_RUN_YOUTUBE=false
+WIFI_GOOD_YT_INTERVAL=1800            # seconds between yt pulls
+YT_TEST_VIDEO_URL="https://www.youtube.com/watch?v=BaW_jenozKc"  # yt-dlp's test video
+
+# Traffic intensity: light | medium | heavy
+WLAN0_TRAFFIC_INTENSITY=medium
+
+# Roaming controls
+WIFI_ROAMING_ENABLED=true
+WIFI_ROAMING_INTERVAL=120
+WIFI_ROAMING_SCAN_INTERVAL=30
+WIFI_MIN_SIGNAL_THRESHOLD=-75
+WIFI_ROAMING_SIGNAL_DIFF=10
+WIFI_BAND_PREFERENCE=2.4  # 2.4 | 5 | both
+
+# Interface / hostnames (can be overridden by interface-assignments.conf)
+WIFI_GOOD_HOSTNAME="CNXNMist-WiFiGood"
+WIFI_BAD_HOSTNAME="CNXNMist-WiFiBad"
+
+# Timeouts & retries
+WIFI_CONNECTION_TIMEOUT=30
+WIFI_MAX_RETRY_ATTEMPTS=3
+WIFI_GOOD_REFRESH_INTERVAL=60
+EOF
+
+  chown "$PI_USER:$PI_USER" "$DASHBOARD_DIR/configs/settings.conf"
+  log_info "Created default settings: $DASHBOARD_DIR/configs/settings.conf"
+else
+  log_info "settings.conf already present; leaving as-is"
+fi
+
 chown -R "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard"
 
 log_info "✓ Created main directories"

@@ -46,6 +46,47 @@ log_info "Installing network testing tools..."
 echo 'iperf3 iperf3/start_daemon boolean false' | debconf-set-selections
 apt-get install -y iperf3 tcpdump
 
+# --- Extra traffic tools: speedtest-cli & yt-dlp ---
+# We try apt first; if that fails, fall back to pip (without breaking the script)
+log_info "Ensuring speedtest-cli and yt-dlp are available..."
+
+# speedtest-cli (binary is usually `speedtest`)
+if ! command -v speedtest >/dev/null 2>&1; then
+  if apt-get install -y -o Dpkg::Options::=--force-confnew speedtest-cli 2>/dev/null; then
+    log_info "Installed speedtest-cli via apt"
+  else
+    # Fallback to pip
+    if command -v python3 >/dev/null 2>&1; then
+      python3 -m pip install --break-system-packages -q speedtest-cli 2>/dev/null && \
+        log_info "Installed speedtest-cli via pip" || \
+        log_warn "speedtest-cli install via pip failed"
+    else
+      log_warn "python3 not found; cannot install speedtest-cli fallback"
+    fi
+  fi
+else
+  log_info "speedtest-cli already present"
+fi
+
+# yt-dlp
+if ! command -v yt-dlp >/dev/null 2>&1; then
+  if apt-get install -y -o Dpkg::Options::=--force-confnew yt-dlp 2>/dev/null; then
+    log_info "Installed yt-dlp via apt"
+  else
+    # Fallback to pip
+    if command -v python3 >/dev/null 2>&1; then
+      python3 -m pip install --break-system-packages -q yt-dlp 2>/dev/null && \
+        log_info "Installed yt-dlp via pip" || \
+        log_warn "yt-dlp install via pip failed"
+    else
+      log_warn "python3 not found; cannot install yt-dlp fallback"
+    fi
+  fi
+else
+  log_info "yt-dlp already present"
+fi
+
+
 # Install Official Ookla Speedtest CLI (the better, official version)
 log_info "Installing official Ookla Speedtest CLI..."
 if ! command -v speedtest >/dev/null 2>&1; then
