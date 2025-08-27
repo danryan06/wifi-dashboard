@@ -46,6 +46,43 @@ log_msg() {
   fi
 }
 
+# --- tiny helpers for state / ip / ssid ---
+nm_state() {
+  nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null \
+    | cut -d: -f2 | awk '{print $1}' || echo "unknown"
+}
+
+current_ip() {
+  ip -4 -o addr show dev "$INTERFACE" 2>/dev/null \
+    | awk '{print $4}' | head -n1
+}
+
+current_ssid() {
+  nmcli -t -f active,ssid dev wifi 2>/dev/null \
+    | awk -F: '$1=="yes"{print $2; exit}'
+}
+
+ensure_connected() {
+  local st ip ss
+  st="$(nm_state)"
+  ip="$(current_ip)"
+  ss="$(current_ssid)"
+
+  if [[ "$st" == "100" && -n "$ip" && "$ss" == "$SSID" ]]; then
+    return 0
+  fi
+
+  log_msg "ensure_connected: re-attaching to $SSID..."
+  if connect_to_wifi_with_roaming "$SSID" "$PASSWORD"; then
+    log_msg "ensure_connected: OK"
+    return 0
+  fi
+
+  log_msg "ensure_connected: failed to re-attach"
+  return 1
+}
+
+
 # --- Settings ---
 [[ -f "$SETTINGS" ]] && source "$SETTINGS" || true
 INTERFACE="${WIFI_GOOD_INTERFACE:-$INTERFACE}"
@@ -210,24 +247,75 @@ select_roaming_target() {
 }
 
 perform_roaming() {
-  local bssid="$1" ss="$2" pw="$3" cn="wifi-roam-$(date +%s)"
-  log_msg "Roaming to BSSID: $bssid (SSID: $ss)"
-  nmcli connection show 2>/dev/null | awk '/wifi-roam-/{print $1}' | xargs -r -n1 nmcli connection delete >/dev/null 2>&1 || true
-  if nmcli connection add type wifi con-name "$cn" ifname "$INTERFACE" ssid "$ss" \
-       802-11-wireless.bssid "$bssid" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$pw" \
-       wifi.cloned-mac-address preserve ipv4.method auto ipv6.method ignore >/dev/null 2>&1; then
-    nmcli device disconnect "$INTERFACE" 2>/dev/null || true; sleep 2
-    if timeout "$CONNECTION_TIMEOUT" nmcli connection up "$cn" >/dev/null 2>&1; then
-      sleep 2
-      local new; new=$(get_current_bssid)
-      if [[ "$new" == "$bssid" ]]; then
-        log_msg "Roam OK -> $bssid (${BSSID_SIGNALS[$bssid]} dBm)"
-        nmcli connection delete "$cn" 2>/dev/null || true
-        CURRENT_BSSID="$bssid"; LAST_ROAM_TIME=$(date +%s); return 0
-      fi
+    local target_bssid="$1"
+    local target_ssid="$2"
+    local target_password="$3"
+    local roam_connection_name="wifi-roam-$(date +%s)"
+
+    log_msg "Roaming to BSSID: $target_bssid (SSID: $target_ssid)"
+
+    # Clean any previous transient roam profiles
+    nmcli connection show 2>/dev/null | awk '/^wifi-roam-/{print $1}' \
+      | while read -r old_conn; do
+          [[ -n "$old_conn" ]] && nmcli connection delete "$old_conn" 2>/dev/null || true
+        done
+
+    # Prepare a one-off profile for the specific BSSID
+    if ! nmcli connection add \
+          type wifi \
+          con-name "$roam_connection_name" \
+          ifname "$INTERFACE" \
+          ssid "$target_ssid" \
+          802-11-wireless.bssid "$target_bssid" \
+          wifi-sec.key-mgmt wpa-psk \
+          wifi-sec.psk "$target_password" \
+          wifi.cloned-mac-address preserve \
+          ipv4.method auto \
+          ipv6.method ignore >/dev/null 2>&1; then
+        log_msg "Failed to create roaming profile"
+        return 1
     fi
-  fi
-  log_msg "Roam failed"; nmcli connection delete "$cn" 2>/dev/null || true; return 1
+
+    # Gracefully step off current AP
+    nmcli device disconnect "$INTERFACE" 2>/dev/null || true
+    sleep 2
+
+    # Try to bring up the roam profile
+    if timeout "$CONNECTION_TIMEOUT" nmcli connection up "$roam_connection_name" >/dev/null 2>&1; then
+        sleep 3
+        local new_bssid
+        new_bssid="$(iwconfig "$INTERFACE" 2>/dev/null | awk '/Access Point/ {print $6}')"
+        new_bssid="$(echo "$new_bssid" | tr '[:upper:]' '[:lower:]')"
+        if [[ "$new_bssid" == "$target_bssid" ]]; then
+            log_msg "Roam OK -> $new_bssid"
+            CURRENT_BSSID="$new_bssid"
+            LAST_ROAM_TIME=$(date +%s)
+            nmcli connection delete "$roam_connection_name" 2>/dev/null || true
+            return 0
+        fi
+        log_msg "Roam verification failed (got $new_bssid)"
+    else
+        log_msg "Roam failed"
+    fi
+
+    # Clean up the transient profile
+    nmcli connection delete "$roam_connection_name" 2>/dev/null || true
+
+    # --- NEW: immediate fallback to original SSID so we aren't left disconnected
+    log_msg "Restoring connection to $target_ssid after roam failure..."
+    if timeout "$CONNECTION_TIMEOUT" \
+         nmcli device wifi connect "$target_ssid" password "$target_password" ifname "$INTERFACE" >/dev/null 2>&1; then
+        log_msg "Restored original connection"
+        return 1
+    fi
+
+    # Heavy fallback: use our normal connect routine
+    if connect_to_wifi_with_roaming "$target_ssid" "$target_password"; then
+        log_msg "Fallback reconnect succeeded"
+    else
+        log_msg "Fallback reconnect failed"
+    fi
+    return 1
 }
 
 connect_to_wifi_with_roaming() {
@@ -289,33 +377,84 @@ should_perform_roaming() {
 }
 
 manage_roaming() {
-  [[ "$ROAMING_ENABLED" != "true" ]] && return 0
-  discover_bssids_for_ssid "$SSID" || return 0
-  should_perform_roaming || return 0
-  local cur; cur=$(get_current_bssid)
-  [[ -z "$cur" ]] && { log_msg "Current BSSID unknown; skip roaming"; return 0; }
-  local tgt; tgt=$(select_roaming_target "$cur")
-  [[ -z "$tgt" ]] && { log_msg "No better BSSID found"; return 0; }
-  perform_roaming "$tgt" "$SSID" "$PASSWORD" || log_msg "Roaming attempt failed"
+    if [[ "$ROAMING_ENABLED" != "true" ]]; then
+        return 0
+    fi
+
+    # Keep the candidate list fresh
+    discover_bssids_for_ssid "$SSID" || return 0
+
+    if should_perform_roaming; then
+        log_msg "Roaming interval reached; evaluating..."
+        CURRENT_BSSID="$(iwconfig "$INTERFACE" 2>/dev/null | awk '/Access Point/ {print $6}' | tr '[:upper:]' '[:lower:]')"
+
+        local target
+        target="$(select_roaming_target "$CURRENT_BSSID")"
+        if [[ -n "$target" ]]; then
+            if perform_roaming "$target" "$SSID" "$PASSWORD"; then
+                log_msg "Roaming completed"
+            else
+                log_msg "Roaming attempt failed"
+            fi
+
+            # --- NEW: re-validate connection and recover if needed
+            if ! ensure_connected; then
+                log_msg "Post-roam: no usable connection; deferring traffic this cycle"
+                return 1
+            fi
+
+            # short settle time
+            sleep 5
+        else
+            log_msg "No better BSSID found; staying on $CURRENT_BSSID"
+        fi
+    fi
 }
+
 
 # --- Traffic ---
 test_basic_connectivity() {
-  log_msg "Testing connectivity on $INTERFACE..."
-  local ok=0 tot=0
-  for url in "${TEST_URLS[@]}"; do
-    ((tot++))
-    if timeout 15 curl --interface "$INTERFACE" --max-time 10 -fsSL -o /dev/null "$url" 2>/dev/null; then
-      log_msg "Connectivity test passed: $url"; ((ok++))
+    log_msg "Testing connectivity on $INTERFACE..."
+
+    # --- DNS sanity check (informational only) ---
+    if getent hosts google.com >/dev/null 2>&1; then
+        log_msg "DNS resolution OK"
     else
-      log_msg "Connectivity test failed: $url"
+        log_msg "DNS resolution appears broken"
     fi
-    sleep 1
-  done
-  if timeout 10 ping -I "$INTERFACE" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then log_msg "Ping connectivity test passed"; ((ok++)); ((tot++)); fi
-  log_msg "Connectivity: $ok/$tot tests passed"
-  (( ok > 0 ))
+
+    local success_count=0
+    local test_count=0
+
+    # HTTPS reachability tests
+    for url in "${TEST_URLS[@]}"; do
+        ((test_count++))
+        if timeout 15 curl --interface "$INTERFACE" --max-time 10 -fsSL -o /dev/null "$url" 2>/dev/null; then
+            log_msg "Connectivity test passed: $url"
+            ((success_count++))
+        else
+            log_msg "Connectivity test failed: $url"
+        fi
+        sleep 1
+    done
+
+    # ICMP sanity
+    ((test_count++))
+    if timeout 10 ping -I "$INTERFACE" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then
+        log_msg "Ping connectivity test passed"
+        ((success_count++))
+    else
+        log_msg "Ping connectivity test failed"
+    fi
+
+    log_msg "Connectivity: $success_count/$test_count tests passed"
+    if (( success_count > 0 )); then
+        return 0
+    else
+        return 1
+    fi
 }
+
 
 generate_ping_traffic() {
   log_msg "Generating ping traffic (${PING_COUNT} per target)"
@@ -371,22 +510,48 @@ maybe_youtube_pull() {
 }
 
 generate_realistic_traffic() {
-  [[ "$ENABLE_INTEGRATED_TRAFFIC" == "true" ]] || { log_msg "Integrated traffic disabled"; return 0; }
-  log_msg "Starting realistic traffic (intensity: $TRAFFIC_INTENSITY)"
-  test_basic_connectivity || { log_msg "Basic connectivity failed; skipping traffic"; return 1; }
-  generate_ping_traffic
-  local now=$(date +%s) stamp="/tmp/wifi_good_dl.last" last=0
-  [[ -f "$stamp" ]] && last="$(cat "$stamp" 2>/dev/null || echo 0)"
-  if (( now - last >= DOWNLOAD_INTERVAL )); then
-    generate_download_traffic
-    echo "$now" > "$stamp"
-  fi
-  # Optional heavy items (no-op if disabled/not installed)
-  maybe_speedtest
-  maybe_youtube_pull
-  log_msg "Traffic cycle complete"
-  return 0
+    if [[ "$ENABLE_INTEGRATED_TRAFFIC" != "true" ]]; then
+        log_msg "Integrated traffic generation disabled"
+        return 0
+    fi
+
+    # --- Health gate: don't run traffic unless link is healthy ---
+    local st ip ss
+    st="$(nm_state)"
+    ip="$(current_ip)"
+    ss="$(current_ssid)"
+    if [[ "$st" != "100" || -z "$ip" || "$ss" != "$SSID" ]]; then
+        log_msg "Traffic suppressed: link not healthy (state=$st, ip=${ip:-none}, ssid=${ss:-none})"
+        return 1
+    fi
+
+    log_msg "Starting realistic traffic generation (intensity: $TRAFFIC_INTENSITY)..."
+
+    # Basic connectivity check (HTTPS + ping)
+    if ! test_basic_connectivity; then
+        log_msg "Basic connectivity failed; skipping traffic"
+        return 1
+    fi
+
+    # Light/continuous traffic
+    generate_ping_traffic
+
+    # Periodic heavier downloads
+    local now stamp last
+    now=$(date +%s)
+    stamp="/tmp/wifi_good_download.last"
+    last=0
+    [[ -f "$stamp" ]] && last="$(cat "$stamp" 2>/dev/null || echo 0)"
+
+    if (( now - last >= DOWNLOAD_INTERVAL )); then
+        generate_download_traffic
+        echo "$now" > "$stamp"
+    fi
+
+    log_msg "Realistic traffic generation cycle completed"
+    return 0
 }
+
 
 # --- Main loop ---
 main_loop() {
