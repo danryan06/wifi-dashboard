@@ -82,6 +82,55 @@ ensure_connected() {
   return 1
 }
 
+# Remove any existing NM connections for this SSID to avoid NM preferring a different BSSID
+prune_same_ssid_profiles() {
+  local ssid="$1"
+  nmcli -t -f NAME,TYPE con show 2>/dev/null \
+    | awk -F: '$2=="wifi"{print $1}' \
+    | while read -r c; do
+        local cs
+        cs="$(nmcli -t -f 802-11-wireless.ssid con show "$c" 2>/dev/null | cut -d: -f2 || true)"
+        [[ "$cs" == "$ssid" ]] && nmcli con delete "$c" 2>/dev/null || true
+      done
+}
+
+# Connect to a specific BSSID using a temporary, BSSID-locked profile; verify with iw
+connect_locked_bssid() {
+  local bssid="$1" ssid="$2" psk="$3"
+  local tmp_name="wifi-lock-$bssid-$$"
+
+  prune_same_ssid_profiles "$ssid"
+
+  if ! nmcli con add type wifi ifname "$INTERFACE" con-name "$tmp_name" ssid "$ssid" \
+       802-11-wireless.bssid "$bssid" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$psk" \
+       ipv4.method auto ipv6.method ignore connection.autoconnect no >/dev/null 2>&1; then
+    log_msg "Failed creating locked profile for $bssid"
+    return 1
+  fi
+
+  nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
+  sleep 1
+
+  if ! nmcli --wait 45 con up "$tmp_name" ifname "$INTERFACE" >/dev/null 2>&1; then
+    log_msg "Activation failed for locked profile $bssid"
+    nmcli con delete "$tmp_name" 2>/dev/null || true
+    return 1
+  fi
+
+  sleep 3
+  local new_bssid
+  new_bssid="$(iw dev "$INTERFACE" link | awk '/Connected to/{print tolower($3)}')"
+  nmcli con delete "$tmp_name" 2>/dev/null || true
+
+  if [[ "$new_bssid" == "${bssid,,}" ]]; then
+    log_msg "Locked connect OK → $new_bssid"
+    return 0
+  else
+    log_msg "Locked connect verified wrong BSSID (${new_bssid:-unknown})"
+    return 1
+  fi
+}
+
 
 # --- Settings ---
 [[ -f "$SETTINGS" ]] && source "$SETTINGS" || true
@@ -247,125 +296,105 @@ select_roaming_target() {
 }
 
 perform_roaming() {
-    local target_bssid="$1"
-    local target_ssid="$2"
-    local target_password="$3"
-    local roam_connection_name="wifi-roam-$(date +%s)"
+  local target_bssid="$1" target_ssid="$2" target_password="$3"
+  local tmp_name="wifi-roam-$target_bssid-$$"
+  log_msg "Roaming to BSSID: $target_bssid (SSID: $target_ssid)"
 
-    log_msg "Roaming to BSSID: $target_bssid (SSID: $target_ssid)"
+  prune_same_ssid_profiles "$target_ssid"
 
-    # Clean any previous transient roam profiles
-    nmcli connection show 2>/dev/null | awk '/^wifi-roam-/{print $1}' \
-      | while read -r old_conn; do
-          [[ -n "$old_conn" ]] && nmcli connection delete "$old_conn" 2>/dev/null || true
-        done
-
-    # Prepare a one-off profile for the specific BSSID
-    if ! nmcli connection add \
-          type wifi \
-          con-name "$roam_connection_name" \
-          ifname "$INTERFACE" \
-          ssid "$target_ssid" \
-          802-11-wireless.bssid "$target_bssid" \
-          wifi-sec.key-mgmt wpa-psk \
-          wifi-sec.psk "$target_password" \
-          wifi.cloned-mac-address preserve \
-          ipv4.method auto \
-          ipv6.method ignore >/dev/null 2>&1; then
-        log_msg "Failed to create roaming profile"
-        return 1
-    fi
-
-    # Gracefully step off current AP
-    nmcli device disconnect "$INTERFACE" 2>/dev/null || true
-    sleep 2
-
-    # Try to bring up the roam profile
-    if timeout "$CONNECTION_TIMEOUT" nmcli connection up "$roam_connection_name" >/dev/null 2>&1; then
-        sleep 3
-        local new_bssid
-        new_bssid="$(iwconfig "$INTERFACE" 2>/dev/null | awk '/Access Point/ {print $6}')"
-        new_bssid="$(echo "$new_bssid" | tr '[:upper:]' '[:lower:]')"
-        if [[ "$new_bssid" == "$target_bssid" ]]; then
-            log_msg "Roam OK -> $new_bssid"
-            CURRENT_BSSID="$new_bssid"
-            LAST_ROAM_TIME=$(date +%s)
-            nmcli connection delete "$roam_connection_name" 2>/dev/null || true
-            return 0
-        fi
-        log_msg "Roam verification failed (got $new_bssid)"
-    else
-        log_msg "Roam failed"
-    fi
-
-    # Clean up the transient profile
-    nmcli connection delete "$roam_connection_name" 2>/dev/null || true
-
-    # --- NEW: immediate fallback to original SSID so we aren't left disconnected
-    log_msg "Restoring connection to $target_ssid after roam failure..."
-    if timeout "$CONNECTION_TIMEOUT" \
-         nmcli device wifi connect "$target_ssid" password "$target_password" ifname "$INTERFACE" >/dev/null 2>&1; then
-        log_msg "Restored original connection"
-        return 1
-    fi
-
-    # Heavy fallback: use our normal connect routine
-    if connect_to_wifi_with_roaming "$target_ssid" "$target_password"; then
-        log_msg "Fallback reconnect succeeded"
-    else
-        log_msg "Fallback reconnect failed"
-    fi
+  # Create BSSID-locked roaming profile
+  if ! nmcli con add type wifi ifname "$INTERFACE" con-name "$tmp_name" ssid "$target_ssid" \
+       802-11-wireless.bssid "$target_bssid" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$target_password" \
+       ipv4.method auto ipv6.method ignore connection.autoconnect no >/dev/null 2>&1; then
+    log_msg "Failed to create roaming profile"
     return 1
+  fi
+
+  nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
+  sleep 1
+
+  if ! nmcli --wait 45 con up "$tmp_name" ifname "$INTERFACE" >/dev/null 2>&1; then
+    log_msg "Roam activation failed"
+    nmcli con delete "$tmp_name" 2>/dev/null || true
+    return 1
+  fi
+
+  sleep 3
+  local new_bssid
+  new_bssid="$(iw dev "$INTERFACE" link | awk '/Connected to/{print tolower($3)}')"
+  if [[ "$new_bssid" == "${target_bssid,,}" ]]; then
+    log_msg "Roam successful → $new_bssid"
+    CURRENT_BSSID="$new_bssid"
+    LAST_ROAM_TIME="$(date +%s)"
+    nmcli con delete "$tmp_name" 2>/dev/null || true
+    return 0
+  else
+    log_msg "Roam verification failed (still on ${new_bssid:-unknown})"
+    nmcli con delete "$tmp_name" 2>/dev/null || true
+    return 1
+  fi
 }
 
+
 connect_to_wifi_with_roaming() {
-  local ss="$1" pw="$2" name="wifi-good-$ss"
-  discover_bssids_for_ssid "$ss" || true
-  nmcli -t -f NAME,TYPE connection show 2>/dev/null | awk -F: '$2=="wifi"{print $1}' | \
-    while read -r c; do [[ -n "$c" ]] && nmcli connection delete "$c" 2>/dev/null || true; done
+  local ssid="$1" password="$2"
+  log_msg "Connecting to Wi-Fi (roaming enabled=${ROAMING_ENABLED}) for SSID '$ssid'"
 
-  local target="" best=-100
+  # Discover candidates
+  discover_bssids_for_ssid "$ssid" || true
+
+  # Pick strongest if we have any
+  local target_bssid="" best_signal=-100
   for b in "${!DISCOVERED_BSSIDS[@]}"; do
-    local s="${BSSID_SIGNALS[$b]}"; (( s > best )) && { best=$s; target="$b"; }
+    local s="${BSSID_SIGNALS[$b]}"
+    [[ -n "$s" && "$s" -gt "$best_signal" ]] && best_signal="$s" && target_bssid="$b"
   done
 
-  if [[ -n "$target" ]]; then
-    log_msg "Connecting via specific BSSID $target (${best} dBm)"
-    if nmcli connection add type wifi con-name "$name" ifname "$INTERFACE" ssid "$ss" \
-         802-11-wireless.bssid "$target" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$pw" \
-         wifi.cloned-mac-address preserve ipv4.method auto ipv6.method ignore >/dev/null 2>&1; then
-      nmcli device disconnect "$INTERFACE" 2>/dev/null || true; sleep 2
-      if timeout "$CONNECTION_TIMEOUT" nmcli connection up "$name" >/dev/null 2>&1; then
-        :
-      else
-        nmcli connection delete "$name" 2>/dev/null || true; target=""
-      fi
+  # Try BSSID-locked first if we have one
+  if [[ -n "$target_bssid" ]]; then
+    log_msg "Connecting via specific BSSID $target_bssid ($best_signal dBm)"
+    if connect_locked_bssid "$target_bssid" "$ssid" "$password"; then
+      :
     else
-      target=""
+      log_msg "Locked connect failed; falling back to direct connect"
     fi
   fi
 
-  if [[ -z "$target" ]]; then
-    log_msg "Falling back to direct connection"
-    nmcli device disconnect "$INTERFACE" 2>/dev/null || true; sleep 2
-    timeout "$CONNECTION_TIMEOUT" nmcli device wifi connect "$ss" password "$pw" ifname "$INTERFACE" >/dev/null 2>&1 || return 1
+  # Fallback: standard “connect by SSID”
+  local state after_ssid
+  state="$(nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}' || echo "0")"
+  if [[ "$state" != "100" ]]; then
+    nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
+    sleep 1
+    if ! nmcli --wait 45 device wifi connect "$ssid" password "$password" ifname "$INTERFACE" >/dev/null 2>&1; then
+      log_msg "Direct connect failed"
+      return 1
+    fi
   fi
 
-  sleep 2; CURRENT_BSSID=$(get_current_bssid)
-  log_msg "Connected to BSSID: ${CURRENT_BSSID:-unknown}"
-
-  # Wait for IP
-  local t=0 ip=""
+  # Verify IP
   log_msg "Waiting for IP address..."
-  while (( t < 40 )); do
-    ip="$(current_ip)"
-    [[ -n "$ip" ]] && { log_msg "IP address: $ip"; return 0; }
-    if (( t % 10 == 0 && t > 0 )); then
-      log_msg "Reapplying connection (no IP yet)..."; nmcli device reapply "$INTERFACE" 2>/dev/null || true
+  for _ in {1..20}; do
+    local ip
+    ip="$(ip addr show "$INTERFACE" | awk '/inet /{print $2; exit}')"
+    if [[ -n "$ip" ]]; then
+      log_msg "IP address: $ip"
+      break
     fi
-    sleep 2; t=$((t+2))
+    sleep 2
   done
-  log_msg "Connected but no IP after timeout"; return 1
+
+  # Record current BSSID for status/roam decisions
+  CURRENT_BSSID="$(iw dev "$INTERFACE" link | awk '/Connected to/{print tolower($3)}')"
+
+  # If we don't have its signal in the map (e.g., discovery failed earlier), stash it
+  if [[ -n "$CURRENT_BSSID" && -z "${BSSID_SIGNALS[$CURRENT_BSSID]:-}" ]]; then
+    local sig="$(iw dev "$INTERFACE" link | awk '/signal:/{print $2}')"
+    [[ -n "$sig" ]] && BSSID_SIGNALS["$CURRENT_BSSID"]="$sig"
+  fi
+
+  log_msg "Successfully connected to $ssid (BSSID=${CURRENT_BSSID:-unknown})"
+  return 0
 }
 
 should_perform_roaming() {
