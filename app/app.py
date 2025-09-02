@@ -15,6 +15,14 @@ CONFIG_FILE = os.path.join(BASE_DIR, "configs", "ssid.conf")
 SETTINGS_FILE = os.path.join(BASE_DIR, "configs", "settings.conf")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 
+@app.after_request
+def _no_cache(resp):
+    # Stop browsers/proxies from caching JSON endpoints like /api/logs/...
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
 # Throughput monitoring
 last_stats = {}
 last_stats_time = 0

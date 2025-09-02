@@ -1028,6 +1028,14 @@
                         <button class="log-tab" data-log="wifi-bad">❌ Wi-Fi Bad</button>
                         
                     </div>
+                    <div class="log-controls" id="logControls" style="display:none; gap:.5rem; align-items:center; margin:.5rem 0;">
+                        <label for="autoRefreshToggle" style="margin-right:.25rem;">Auto refresh</label>
+                        <input type="checkbox" id="autoRefreshToggle" checked />
+                        <label for="autoRefreshInterval" style="margin-left:.75rem;">Every</label>
+                        <input type="number" id="autoRefreshInterval" min="3" max="60" step="1" value="5" style="width:4rem;" />
+                        <span>sec</span>
+                    </div>
+        
                     <div class="log-info">
                         <span id="log-info-text">Select a log to view</span>
                     </div>
@@ -1897,6 +1905,48 @@
                 }
             });
         }, 3000);
-    </script>
+    
+    // --- Auto-refresh helpers for log panes ---
+    let __logAutoTimer = null;
+    function stopAutoRefresh() {
+        if (__logAutoTimer) {
+            clearInterval(__logAutoTimer);
+            __logAutoTimer = null;
+        }
+    }
+    function startAutoRefresh() {
+        stopAutoRefresh();
+        const toggle = document.getElementById('autoRefreshToggle');
+        const input  = document.getElementById('autoRefreshInterval');
+        if (!toggle || !input) return;
+        if (!toggle.checked) return;
+        let sec = parseInt(input.value, 10);
+        if (!Number.isFinite(sec) || sec < 3) sec = 5;
+        __logAutoTimer = setInterval(() => {
+            if (typeof loadCurrentLog === 'function') {
+                loadCurrentLog();
+            }
+        }, sec * 1000);
+    }
+    function updateLogControlsVisibility() {
+        const el = document.getElementById('logControls');
+        if (!el) return;
+        const show = (window.currentLogName === 'wifi-good' || window.currentLogName === 'wifi-bad');
+        el.style.display = show ? 'flex' : 'none';
+        if (!show) {
+            stopAutoRefresh();
+        } else {
+            // Kick off a fresh cycle when shown
+            startAutoRefresh();
+        }
+    }
+    // Wire UI events
+    document.addEventListener('DOMContentLoaded', () => {
+        const tgl = document.getElementById('autoRefreshToggle');
+        const ivl = document.getElementById('autoRefreshInterval');
+        if (tgl) tgl.addEventListener('change', startAutoRefresh);
+        if (ivl) ivl.addEventListener('change', startAutoRefresh);
+    });
+</script>
 </body>
 </html>
