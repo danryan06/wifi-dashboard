@@ -20,6 +20,13 @@ LOG_MAX_SIZE_BYTES="${LOG_MAX_SIZE_BYTES:-10485760}"   # 10MB default
 # Trap errors but DO NOT exit service
 trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec line=$LINENO" | tee -a "$LOG_FILE"' ERR
 
+# --- Privilege helper for nmcli ---
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  SUDO="sudo"
+else
+  SUDO=""
+fi
+
 # --- Rotation helpers ---
 [[ -f "$ROTATE_UTIL" ]] && source "$ROTATE_UTIL" || true
 rotate_basic() {
@@ -85,50 +92,33 @@ ensure_connected() {
 # Remove any existing NM connections for this SSID to avoid NM preferring a different BSSID
 prune_same_ssid_profiles() {
   local ssid="$1"
-  nmcli -t -f NAME,TYPE con show 2>/dev/null \
+  $SUDO nmcli -t -f NAME,TYPE con show 2>/dev/null \
     | awk -F: '$2=="wifi"{print $1}' \
     | while read -r c; do
         local cs
-        cs="$(nmcli -t -f 802-11-wireless.ssid con show "$c" 2>/dev/null | cut -d: -f2 || true)"
-        [[ "$cs" == "$ssid" ]] && nmcli con delete "$c" 2>/dev/null || true
+        cs="$($SUDO nmcli -t -f 802-11-wireless.ssid con show "$c" 2>/dev/null | cut -d: -f2 || true)"
+        [[ "$cs" == "$ssid" ]] && $SUDO nmcli con delete "$c" 2>/dev/null || true
       done
 }
 
 # Connect to a specific BSSID using a temporary, BSSID-locked profile; verify with iw
 connect_locked_bssid() {
   local bssid="$1" ssid="$2" psk="$3"
-  local tmp_name="wifi-lock-$bssid-$$"
-
   prune_same_ssid_profiles "$ssid"
-
-  if ! nmcli con add type wifi ifname "$INTERFACE" con-name "$tmp_name" ssid "$ssid" \
-       802-11-wireless.bssid "$bssid" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$psk" \
-       ipv4.method auto ipv6.method ignore connection.autoconnect no >/dev/null 2>&1; then
-    log_msg "Failed creating locked profile for $bssid"
-    return 1
-  fi
-
-  nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
+  $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
   sleep 1
-
-  if ! nmcli --wait 45 con up "$tmp_name" ifname "$INTERFACE" >/dev/null 2>&1; then
-    log_msg "Activation failed for locked profile $bssid"
-    nmcli con delete "$tmp_name" 2>/dev/null || true
+  local OUT
+  if OUT="$($SUDO nmcli --wait 45 device wifi connect "$ssid" password "$psk" ifname "$INTERFACE" bssid "$bssid" 2>&1)"; then
+    log_msg "BSSID connect success: ${OUT}"
+  else
+    log_msg "BSSID connect failed: ${OUT}"
     return 1
   fi
-
   sleep 3
   local new_bssid
   new_bssid="$(iw dev "$INTERFACE" link | awk '/Connected to/{print tolower($3)}')"
-  nmcli con delete "$tmp_name" 2>/dev/null || true
-
-  if [[ "$new_bssid" == "${bssid,,}" ]]; then
-    log_msg "Locked connect OK → $new_bssid"
-    return 0
-  else
-    log_msg "Locked connect verified wrong BSSID (${new_bssid:-unknown})"
-    return 1
-  fi
+  [[ "$new_bssid" == "${bssid,,}" ]] || { log_msg "BSSID verify mismatch (${new_bssid:-unknown})"; return 1; }
+  return 0
 }
 
 
@@ -145,7 +135,7 @@ ROAMING_INTERVAL="${WIFI_ROAMING_INTERVAL:-120}"
 ROAMING_SCAN_INTERVAL="${WIFI_ROAMING_SCAN_INTERVAL:-30}"
 MIN_SIGNAL_THRESHOLD="${WIFI_MIN_SIGNAL_THRESHOLD:--75}"
 ROAMING_SIGNAL_DIFF="${WIFI_ROAMING_SIGNAL_DIFF:-10}"
-WIFI_BAND_PREFERENCE="${WIFI_BAND_PREFERENCE:-2.4}"
+WIFI_BAND_PREFERENCE="${WIFI_BAND_PREFERENCE:-both}"
 
 # Traffic config
 TRAFFIC_INTENSITY="${WLAN0_TRAFFIC_INTENSITY:-medium}"
@@ -204,11 +194,11 @@ read_wifi_config() {
 check_wifi_interface() {
   ip link show "$INTERFACE" >/dev/null 2>&1 || { log_msg "Interface $INTERFACE not found"; return 1; }
   if ! ip link show "$INTERFACE" | grep -q "state UP"; then
-    log_msg "Bringing $INTERFACE up..."; sudo ip link set "$INTERFACE" up || true; sleep 2
+    log_msg "Bringing $INTERFACE up..."; $SUDO ip link set "$INTERFACE" up || true; sleep 2
   fi
-  if ! nmcli device show "$INTERFACE" >/dev/null 2>&1; then
-    log_msg "Setting $INTERFACE to managed yes"; sudo nmcli device set "$INTERFACE" managed yes || true; sleep 2
-    nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
+  if ! $SUDO nmcli device show "$INTERFACE" >/dev/null 2>&1; then
+    log_msg "Setting $INTERFACE to managed yes"; $SUDO nmcli device set "$INTERFACE" managed yes || true; sleep 2
+    $SUDO nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
   fi
   local st; st="$(nm_state)"; log_msg "Interface $INTERFACE state: ${st:-unknown}"
   return 0
@@ -257,7 +247,7 @@ discover_bssids_for_ssid() {
 
   if [[ ${#DISCOVERED_BSSIDS[@]} -eq 0 ]]; then
     local nt="/tmp/nm_${INTERFACE}_$$"
-    if nmcli -t --separator '|' -f SSID,BSSID,FREQ,SIGNAL dev wifi list ifname "$INTERFACE" > "$nt" 2>/dev/null; then
+    if $SUDO nmcli -t --separator '|' -f SSID,BSSID,FREQ,SIGNAL dev wifi list ifname "$INTERFACE" > "$nt" 2>/dev/null; then
       while IFS='|' read -r s b f p; do
         [[ "$s" == "$ss" ]] || continue
         case "$WIFI_BAND_PREFERENCE" in 2.4) ((f>=3000)) && continue ;; 5) ((f<=5000)) && continue ;; esac
@@ -297,44 +287,30 @@ select_roaming_target() {
 
 perform_roaming() {
   local target_bssid="$1" target_ssid="$2" target_password="$3"
-  local tmp_name="wifi-roam-$target_bssid-$$"
   log_msg "Roaming to BSSID: $target_bssid (SSID: $target_ssid)"
-
   prune_same_ssid_profiles "$target_ssid"
-
-  # Create BSSID-locked roaming profile
-  if ! nmcli con add type wifi ifname "$INTERFACE" con-name "$tmp_name" ssid "$target_ssid" \
-       802-11-wireless.bssid "$target_bssid" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$target_password" \
-       ipv4.method auto ipv6.method ignore connection.autoconnect no >/dev/null 2>&1; then
-    log_msg "Failed to create roaming profile"
-    return 1
-  fi
-
-  nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
+  $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
   sleep 1
-
-  if ! nmcli --wait 45 con up "$tmp_name" ifname "$INTERFACE" >/dev/null 2>&1; then
-    log_msg "Roam activation failed"
-    nmcli con delete "$tmp_name" 2>/dev/null || true
+  local OUT
+  if OUT="$($SUDO nmcli --wait 45 device wifi connect "$target_ssid" password "$target_password" ifname "$INTERFACE" bssid "$target_bssid" 2>&1)"; then
+    log_msg "Roam connect success: ${OUT}"
+  else
+    log_msg "Roam connect failed: ${OUT}"
     return 1
   fi
-
   sleep 3
   local new_bssid
   new_bssid="$(iw dev "$INTERFACE" link | awk '/Connected to/{print tolower($3)}')"
   if [[ "$new_bssid" == "${target_bssid,,}" ]]; then
-    log_msg "Roam successful → $new_bssid"
+    log_msg "Roam verified → $new_bssid"
     CURRENT_BSSID="$new_bssid"
     LAST_ROAM_TIME="$(date +%s)"
-    nmcli con delete "$tmp_name" 2>/dev/null || true
     return 0
   else
-    log_msg "Roam verification failed (still on ${new_bssid:-unknown})"
-    nmcli con delete "$tmp_name" 2>/dev/null || true
+    log_msg "Roam verification mismatch (${new_bssid:-unknown})"
     return 1
   fi
 }
-
 
 connect_to_wifi_with_roaming() {
   local ssid="$1" password="$2"
@@ -361,14 +337,17 @@ connect_to_wifi_with_roaming() {
   fi
 
   # Fallback: standard “connect by SSID”
-  local state after_ssid
+  local state
   state="$(nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}' || echo "0")"
   if [[ "$state" != "100" ]]; then
-    nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
+    $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
     sleep 1
-    if ! nmcli --wait 45 device wifi connect "$ssid" password "$password" ifname "$INTERFACE" >/dev/null 2>&1; then
-      log_msg "Direct connect failed"
+    local OUT
+    if ! OUT="$($SUDO nmcli --wait 45 device wifi connect "$ssid" password "$password" ifname "$INTERFACE" 2>&1)"; then
+      log_msg "Direct connect failed: ${OUT}"
       return 1
+    else
+      log_msg "Direct connect success: ${OUT}"
     fi
   fi
 
@@ -618,7 +597,7 @@ main_loop() {
 
 cleanup_and_exit() {
   log_msg "Cleaning up good client..."
-  nmcli device disconnect "$INTERFACE" 2>/dev/null || true
+  $SUDO nmcli device disconnect "$INTERFACE" 2>/dev/null || true
   log_msg "Stopped"
   exit 0
 }
