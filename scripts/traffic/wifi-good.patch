@@ -1,0 +1,110 @@
+--- a/scripts/traffic/connect_and_curl.sh
++++ b/scripts/traffic/connect_and_curl.sh
+@@
+ set -uo pipefail
+@@
+ trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec line=$LINENO" | tee -a "$LOG_FILE"' ERR
++
++# --- Privilege helper for nmcli ---
++if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
++  SUDO="sudo"
++else
++  SUDO=""
++fi
+@@
+-WIFI_BAND_PREFERENCE="${WIFI_BAND_PREFERENCE:-2.4}"
++# Prefer both bands by default; we'll usually choose 5 GHz if available
++WIFI_BAND_PREFERENCE="${WIFI_BAND_PREFERENCE:-both}"
+@@
+-  nmcli -t -f NAME,TYPE con show 2>/dev/null \
++  $SUDO nmcli -t -f NAME,TYPE con show 2>/dev/null \
+@@
+-        cs="$(nmcli -t -f 802-11-wireless.ssid con show "$c" 2>/dev/null | cut -d: -f2 || true)"
+-        [[ "$cs" == "$ssid" ]] && nmcli con delete "$c" 2>/dev/null || true
++        cs="$($SUDO nmcli -t -f 802-11-wireless.ssid con show "$c" 2>/dev/null | cut -d: -f2 || true)"
++        [[ "$cs" == "$ssid" ]] && $SUDO nmcli con delete "$c" 2>/dev/null || true
+       done
+ }
+ 
+-# Connect to a specific BSSID using a temporary, BSSID-locked profile; verify with iw
++# Ephemeral BSSID connect (no profile left behind); verify with iw
+ connect_locked_bssid() {
+-  local bssid="$1" ssid="$2" psk="$3"
+-  local tmp_name="wifi-lock-$bssid-$$"
+-
+-  prune_same_ssid_profiles "$ssid"
+-
+-  if ! nmcli con add type wifi ifname "$INTERFACE" con-name "$tmp_name" ssid "$ssid" \
+-       802-11-wireless.bssid "$bssid" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$psk" \
+-       ipv4.method auto ipv6.method ignore connection.autoconnect no >/dev/null 2>&1; then
+-    log_msg "Failed creating locked profile for $bssid"
+-    return 1
+-  fi
+-
+-  nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
+-  sleep 1
+-
+-  if ! nmcli --wait 45 con up "$tmp_name" ifname "$INTERFACE" >/dev/null 2>&1; then
+-    log_msg "Activation failed for locked profile $bssid"
+-    nmcli con delete "$tmp_name" 2>/dev/null || true
+-    return 1
+-  fi
+-
+-  sleep 3
+-  local new_bssid
+-  new_bssid="$(iw dev "$INTERFACE" link | awk '/Connected to/{print tolower($3)}')"
+-  nmcli con delete "$tmp_name" 2>/dev/null || true
+-
+-  if [[ "$new_bssid" == "${bssid,,}" ]]; then
+-    log_msg "Locked connect OK → $new_bssid"
+-    return 0
+-  else
+-    log_msg "Locked connect verified wrong BSSID (${new_bssid:-unknown})"
+-    return 1
+-  fi
++  local bssid="$1" ssid="$2" psk="$3"
++  prune_same_ssid_profiles "$ssid"
++  $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
++  sleep 1
++  local OUT
++  if OUT="$($SUDO nmcli --wait 45 device wifi connect "$ssid" password "$psk" ifname "$INTERFACE" bssid "$bssid" 2>&1)"; then
++    log_msg "BSSID connect success: ${OUT}"
++  else
++    log_msg "BSSID connect failed: ${OUT}"
++    return 1
++  fi
++  sleep 3
++  local new_bssid
++  new_bssid="$(iw dev "$INTERFACE" link | awk '/Connected to/{print tolower($3)}')"
++  [[ "$new_bssid" == "${bssid,,}" ]] || { log_msg "BSSID verify mismatch (${new_bssid:-unknown})"; return 1; }
++  return 0
+ }
+@@
+-    nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
++    $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
+     sleep 1
+-    if ! nmcli --wait 45 device wifi connect "$ssid" password "$password" ifname "$INTERFACE" >/dev/null 2>&1; then
+-      log_msg "Direct connect failed"
+-      return 1
+-    fi
++    local OUT
++    if ! OUT="$($SUDO nmcli --wait 45 device wifi connect "$ssid" password "$password" ifname "$INTERFACE" 2>&1)"; then
++      log_msg "Direct connect failed: ${OUT}"
++      return 1
++    else
++      log_msg "Direct connect success: ${OUT}"
++    fi
+@@
+-  if ! nmcli device show "$INTERFACE" >/dev/null 2>&1; then
+-    log_msg "Setting $INTERFACE to managed yes"; sudo nmcli device set "$INTERFACE" managed yes || true; sleep 2
++  if ! $SUDO nmcli device show "$INTERFACE" >/dev/null 2>&1; then
++    log_msg "Setting $INTERFACE to managed yes"; $SUDO nmcli device set "$INTERFACE" managed yes || true; sleep 2
+     nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
+   fi
+@@
+-  nmcli device disconnect "$INTERFACE" 2>/dev/null || true
++  $SUDO nmcli device disconnect "$INTERFACE" 2>/dev/null || true
+   log_msg "Stopped"
+   exit 0
+ }
+PATCH
