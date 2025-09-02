@@ -220,56 +220,57 @@ get_current_bssid() {
   [[ "$b" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] && echo "$b" || echo ""
 }
 
+# Enhanced BSSID discovery with better case handling
 discover_bssids_for_ssid() {
   local ss="$1" now; now=$(date +%s)
   (( now - LAST_SCAN_TIME < ROAMING_SCAN_INTERVAL )) && return 0
-  log_msg "Scanning (${WIFI_BAND_PREFERENCE}) for BSSIDs broadcasting SSID: $ss"
+  log_msg "🔍 Scanning (${WIFI_BAND_PREFERENCE}) for BSSIDs broadcasting SSID: $ss"
 
   DISCOVERED_BSSIDS=(); BSSID_SIGNALS=()
-  local tmp="/tmp/scan_${INTERFACE}_$$"
-  if sudo iw dev "$INTERFACE" scan > "$tmp" 2>/dev/null; then
-    awk -v ss="$ss" -v band="$WIFI_BAND_PREFERENCE" '
-      /BSS[[:space:]]/     { bssid=$2 }
-      /freq:[[:space:]]/   { freq=$2 }
-      /signal:[[:space:]]/ { sig=$2 }
-      /^[ \t]*SSID:[ \t]*/ {
-        sub(/^[ \t]*SSID:[ \t]*/, "", $0); curr=$0; gsub(/[ \t]+$/, "", curr);
-        ok = (band=="both") || (band=="2.4" && freq<3000) || (band=="5" && freq>5000);
-        if (curr==ss && ok && bssid!="" && sig!="") { gsub(/\(.*/, "", bssid); printf "%s %d %d\n", bssid, int(sig), freq; }
-      }' "$tmp" | sort -k2,2nr > "${tmp}.r"
-    while read -r b s f; do
-      [[ -z "$b" ]] && continue
-      DISCOVERED_BSSIDS["$b"]="$ss"; BSSID_SIGNALS["$b"]="$s"
-      log_msg "Found BSSID: $b (Signal: ${s} dBm @ ${f} MHz)"
-    done < "${tmp}.r"
-    rm -f "$tmp" "${tmp}.r"
-  fi
-
-  if [[ ${#DISCOVERED_BSSIDS[@]} -eq 0 ]]; then
-    local nt="/tmp/nm_${INTERFACE}_$$"
-    if $SUDO nmcli -t --separator '|' -f SSID,BSSID,FREQ,SIGNAL dev wifi list ifname "$INTERFACE" > "$nt" 2>/dev/null; then
-      while IFS='|' read -r s b f p; do
-        [[ "$s" == "$ss" ]] || continue
-        case "$WIFI_BAND_PREFERENCE" in 2.4) ((f>=3000)) && continue ;; 5) ((f<=5000)) && continue ;; esac
-        [[ -n "$b" && -n "$p" ]] || continue
-        local dbm=$(( p/2 - 100 ))
-        (( dbm >= MIN_SIGNAL_THRESHOLD )) || continue
-        DISCOVERED_BSSIDS["$b"]="$s"; BSSID_SIGNALS["$b"]="$dbm"
-        log_msg "(nmcli) Found BSSID: $b (approx ${dbm} dBm @ ${f} MHz)"
-      done < "$nt"
-      rm -f "$nt"
-    fi
+  
+  # Use nmcli for more reliable BSSID detection
+  local scan_output="/tmp/scan_${INTERFACE}_$$"
+  if nmcli device wifi list ifname "$INTERFACE" > "$scan_output" 2>/dev/null; then
+    while read -r line; do
+      # Skip header and empty lines
+      [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+      [[ "$line" =~ BSSID ]] && continue
+      
+      # Extract BSSID (first field) and SSID, handling spaces
+      local bssid=$(echo "$line" | awk '{print $1}')
+      local ssid_field=$(echo "$line" | awk '{print $2}')
+      
+      # Skip if not our target SSID
+      [[ "$ssid_field" != "$ss" ]] && continue
+      
+      # Extract signal strength (convert from % to approximate dBm)
+      local signal_percent=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/ && $i <= 100) print $i}' | head -1)
+      local signal_dbm=$(( signal_percent / 2 - 100 ))
+      
+      # Only include if signal is above threshold
+      (( signal_dbm >= MIN_SIGNAL_THRESHOLD )) || continue
+      
+      DISCOVERED_BSSIDS["$bssid"]="$ss"
+      BSSID_SIGNALS["$bssid"]="$signal_dbm"
+      log_msg "📡 Found BSSID: $bssid (Signal: ${signal_dbm} dBm, ${signal_percent}%)"
+      
+    done < "$scan_output"
+    rm -f "$scan_output"
   fi
 
   LAST_SCAN_TIME="$now"
-  local c=${#DISCOVERED_BSSIDS[@]}
-  if (( c == 0 )); then
-    log_msg "No BSSIDs found for SSID: $ss"; return 1
-  elif (( c == 1 )); then
-    log_msg "Single BSSID found - roaming not possible"
+  local count=${#DISCOVERED_BSSIDS[@]}
+  
+  if (( count == 0 )); then
+    log_msg "❌ No BSSIDs found for SSID: $ss"
+    return 1
+  elif (( count == 1 )); then
+    log_msg "ℹ️  Single BSSID found - roaming not possible"
   else
-    log_msg "Multiple BSSIDs found ($c) - roaming enabled!"
-    for b in "${!DISCOVERED_BSSIDS[@]}"; do log_msg "Available: $b (${BSSID_SIGNALS[$b]} dBm)"; done
+    log_msg "✅ Multiple BSSIDs found ($count) - roaming enabled!"
+    for b in "${!DISCOVERED_BSSIDS[@]}"; do 
+      log_msg "   Available: $b (${BSSID_SIGNALS[$b]} dBm)"
+    done
   fi
   return 0
 }
@@ -287,27 +288,55 @@ select_roaming_target() {
 
 perform_roaming() {
   local target_bssid="$1" target_ssid="$2" target_password="$3"
-  log_msg "Roaming to BSSID: $target_bssid (SSID: $target_ssid)"
-  prune_same_ssid_profiles "$target_ssid"
-  $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
-  sleep 1
-  local OUT
-  if OUT="$($SUDO nmcli --wait 45 device wifi connect "$target_ssid" password "$target_password" ifname "$INTERFACE" bssid "$target_bssid" 2>&1)"; then
-    log_msg "Roam connect success: ${OUT}"
-  else
-    log_msg "Roam connect failed: ${OUT}"
+  local tmp_name="wifi-roam-$(echo $target_bssid | tr ':' '-')-$$"
+  log_msg "🔄 Initiating roaming to BSSID: $target_bssid (SSID: $target_ssid)"
+
+  # DON'T delete existing connections - this was the problem!
+  # prune_same_ssid_profiles "$target_ssid"  # <-- This line causes issues
+
+  # Fresh scan to ensure BSSID visibility
+  nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1
+  sleep 3
+
+  # Verify target BSSID is visible
+  if ! nmcli device wifi list ifname "$INTERFACE" | grep -qi "$target_bssid"; then
+    log_msg "❌ Target BSSID $target_bssid not currently visible"
     return 1
   fi
-  sleep 3
+
+  # Create BSSID-locked roaming profile (using exact case from scan)
+  log_msg "Creating roaming profile for $target_bssid"
+  if ! nmcli con add type wifi ifname "$INTERFACE" con-name "$tmp_name" ssid "$target_ssid" \
+       802-11-wireless.bssid "$target_bssid" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$target_password" \
+       ipv4.method auto ipv6.method ignore connection.autoconnect no >/dev/null 2>&1; then
+    log_msg "❌ Failed to create roaming profile for $target_bssid"
+    return 1
+  fi
+
+  # Activate the new connection
+  log_msg "Activating roaming connection..."
+  if ! nmcli --wait 45 con up "$tmp_name" ifname "$INTERFACE" >/dev/null 2>&1; then
+    log_msg "❌ Roaming activation failed"
+    nmcli con delete "$tmp_name" 2>/dev/null || true
+    return 1
+  fi
+
+  # Verify we're actually connected to the target BSSID
+  sleep 5
   local new_bssid
-  new_bssid="$(iw dev "$INTERFACE" link | awk '/Connected to/{print tolower($3)}')"
-  if [[ "$new_bssid" == "${target_bssid,,}" ]]; then
-    log_msg "Roam verified → $new_bssid"
+  new_bssid="$(iw dev "$INTERFACE" link | awk '/Connected to/{print toupper($3)}')"
+  local target_upper=$(echo "$target_bssid" | tr '[:lower:]' '[:upper:]')
+  
+  # Clean up the temporary profile
+  nmcli con delete "$tmp_name" 2>/dev/null || true
+
+  if [[ "$new_bssid" == "$target_upper" ]]; then
+    log_msg "✅ Roaming successful! Connected to: $new_bssid"
     CURRENT_BSSID="$new_bssid"
     LAST_ROAM_TIME="$(date +%s)"
     return 0
   else
-    log_msg "Roam verification mismatch (${new_bssid:-unknown})"
+    log_msg "❌ Roaming verification failed (connected to: ${new_bssid:-unknown}, expected: $target_upper)"
     return 1
   fi
 }
