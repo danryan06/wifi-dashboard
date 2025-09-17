@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # scripts/install/03-directories.sh
-# Create directory structure and basic configuration
+# Create directory structure and baseline configuration
 
 set -euo pipefail
 
 # --- defaults so set -u is safe ---
 : "${PI_USER:=pi}"
 : "${PI_HOME:=/home/${PI_USER}}"
-: "${VERSION:=v5.0.2}"
+: "${VERSION:=v5.1.0}"
 
 DASHBOARD_DIR="${DASHBOARD_DIR:-${PI_HOME}/wifi_test_dashboard}"
 CONFIG_DIR="${DASHBOARD_DIR}/configs"
@@ -36,18 +36,15 @@ chown -R "${PI_USER}:${PI_USER}" "${DASHBOARD_DIR}" 2>/dev/null || true
 SETTINGS="${CONFIG_DIR}/settings.conf"
 if [[ ! -s "${SETTINGS}" ]]; then
   log_info "Creating default settings.conf..."
-  cat >"${SETTINGS}" <<'EOF'
+  if [[ -f "${CONFIG_DIR}/default_settings.conf" ]]; then
+    cp "${CONFIG_DIR}/default_settings.conf" "${SETTINGS}"
+  else
+    # fallback minimal config if template missing
+    cat >"${SETTINGS}" <<'EOF'
 # General hostnames used by services
 WIRED_HOSTNAME="CNXNMist-Wired"
 WIFI_GOOD_HOSTNAME="CNXNMist-WiFiGood"
 WIFI_BAD_HOSTNAME="CNXNMist-WiFiBad"
-
-# Good client behavior
-WIFI_GOOD_INTEGRATED_TRAFFIC="true"
-WLAN0_TRAFFIC_INTENSITY="medium"
-WIFI_CONNECTION_TIMEOUT="30"
-WIFI_MAX_RETRY_ATTEMPTS="3"
-WIFI_GOOD_REFRESH_INTERVAL="60"
 
 # Roaming
 WIFI_ROAMING_ENABLED="true"
@@ -55,11 +52,10 @@ WIFI_ROAMING_INTERVAL="120"
 WIFI_ROAMING_SCAN_INTERVAL="30"
 WIFI_MIN_SIGNAL_THRESHOLD="-75"
 WIFI_ROAMING_SIGNAL_DIFF="10"
-WIFI_BAND_PREFERENCE="2.4"    # 2.4 | 5 | both
-
-# Log rotation (bytes)
-LOG_MAX_SIZE_BYTES="10485760"
+WIFI_BAND_PREFERENCE="both"    # 2.4 | 5 | both
 EOF
+  fi
+  chmod 600 "${SETTINGS}" 2>/dev/null || true
   chown "${PI_USER}:${PI_USER}" "${SETTINGS}" 2>/dev/null || true
 fi
 
@@ -84,6 +80,7 @@ good_interface="wlan0"
 bad_interface="wlan1"
 wired_interface="eth0"
 EOF
+  chmod 600 "${ASSIGN_CONF}" 2>/dev/null || true
   chown "${PI_USER}:${PI_USER}" "${ASSIGN_CONF}" 2>/dev/null || true
 fi
 
@@ -97,5 +94,12 @@ chown "${PI_USER}:${PI_USER}" "${MAIN_LOG}" 2>/dev/null || true
 
 # make sure script files will be executable later steps
 find "${SCRIPTS_DIR}" -type f -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+
+# --- patch /etc/hosts for hostname resolution ---
+HOSTNAME_NOW="$(hostname)"
+if ! grep -q "$HOSTNAME_NOW" /etc/hosts; then
+  log_info "Patching /etc/hosts for hostname: $HOSTNAME_NOW"
+  echo "127.0.1.1   $HOSTNAME_NOW" | sudo tee -a /etc/hosts >/dev/null
+fi
 
 log_info "✓ Directory structure and baseline configs ready"

@@ -23,6 +23,19 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 log_success() { echo -e "${PURPLE}[SUCCESS]${NC} $1"; }
 
+# --- NEW: Patch /etc/hosts with dashboard hostnames ---
+patch_hosts_for_hostname() {
+    local hn="$1"
+    [[ -z "$hn" ]] && return 0
+
+    # Remove any existing line for this hostname to avoid duplicates
+    sed -i.bak "/[[:space:]]$hn$/d" /etc/hosts
+
+    # Add fresh entry
+    log_info "Ensuring /etc/hosts entry for hostname: $hn"
+    echo "127.0.1.1    $hn" >> /etc/hosts
+}
+
 print_banner() {
     echo -e "${BLUE}"
     echo "███████████████████████████████████████████████████████████████████████████████"
@@ -331,6 +344,11 @@ EOF
     chown -R "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/configs/"
     
     log_info "✓ Early interface assignment completed"
+
+    # --- NEW: Ensure hostnames resolve locally ---
+    patch_hosts_for_hostname "$WIFI_GOOD_HOSTNAME"
+    patch_hosts_for_hostname "$WIFI_BAD_HOSTNAME"
+    patch_hosts_for_hostname "$WIRED_HOSTNAME"
 }
 
 main_installation() {

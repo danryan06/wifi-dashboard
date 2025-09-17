@@ -191,8 +191,10 @@ read_wifi_config() {
   [[ ${#lines[@]} -lt 2 ]] && { log_msg "Config incomplete (need SSID + password)"; return 1; }
   SSID="${lines[0]}"
   PASSWORD="${lines[1]}"
+  export SSID PASSWORD
   if [[ -z "$SSID" || -z "$PASSWORD" ]]; then log_msg "SSID or password empty"; return 1; fi
-  log_msg "Wi-Fi config loaded (SSID: $SSID)"; return 0
+  log_msg "Wi-Fi config loaded (SSID: $SSID)"
+  return 0
 }
 
 # --- Interface mgmt ---
