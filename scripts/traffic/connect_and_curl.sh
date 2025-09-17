@@ -225,16 +225,15 @@ get_current_bssid() {
   [[ "$b" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] && echo "$b" || echo ""
 }
 
-# Enhanced BSSID discovery with better case handling
+# Enhanced BSSID discovery with nmcli + iw fallback
 discover_bssids_for_ssid() {
   local ss="$1" now; now=$(date +%s)
   (( now - LAST_SCAN_TIME < ROAMING_SCAN_INTERVAL )) && return 0
   log_msg "🔍 Scanning (${WIFI_BAND_PREFERENCE}) for BSSIDs broadcasting SSID: $ss"
 
   DISCOVERED_BSSIDS=(); BSSID_SIGNALS=()
-  
-  # Use nmcli for more reliable BSSID detection
-  # Explicitly rescan on chosen band(s)
+
+  # Explicit rescan on chosen band(s)
   case "$WIFI_BAND_PREFERENCE" in
     2.4) nmcli device wifi rescan ifname "$INTERFACE" freq $(freqs_for_band 2.4) >/dev/null 2>&1 ;;
     5)   nmcli device wifi rescan ifname "$INTERFACE" freq $(freqs_for_band 5)   >/dev/null 2>&1 ;;
@@ -242,51 +241,57 @@ discover_bssids_for_ssid() {
     *)   nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1 ;;
   esac
   sleep 2
-  local scan_output="/tmp/scan_${INTERFACE}_$$"
-  if nmcli device wifi list ifname "$INTERFACE" > "$scan_output" 2>/dev/null; then
-    while read -r line; do
-      # Skip header and empty lines
-      [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-      [[ "$line" =~ BSSID ]] && continue
-      
-      # Extract BSSID (first field) and SSID, handling spaces
-      local bssid=$(echo "$line" | awk '{print $1}')
-      local ssid_field=$(echo "$line" | awk '{print $2}')
-      
-      # Skip if not our target SSID
-      [[ "$ssid_field" != "$ss" ]] && continue
-      
-      # Extract signal strength (convert from % to approximate dBm)
-      local signal_percent=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/ && $i <= 100) print $i}' | head -1)
-      local signal_dbm=$(( signal_percent / 2 - 100 ))
-      
-      # Only include if signal is above threshold
+
+  # --- Primary: nmcli ---
+  while IFS=: read -r bssid ssid signal; do
+    [[ "$ssid" != "$ss" ]] && continue
+    [[ -z "$bssid" || -z "$signal" ]] && continue
+    local signal_dbm=$(( signal / 2 - 100 ))
+    (( signal_dbm >= MIN_SIGNAL_THRESHOLD )) || continue
+    DISCOVERED_BSSIDS["$bssid"]="$ssid"
+    BSSID_SIGNALS["$bssid"]="$signal_dbm"
+    log_msg "📡 Found BSSID (nmcli): $bssid (Signal: ${signal_dbm} dBm, ${signal}%)"
+  done < <(nmcli -t -f BSSID,SSID,SIGNAL device wifi list ifname "$INTERFACE" 2>/dev/null)
+
+  # --- Fallback: iw (if nmcli gave nothing) ---
+  if (( ${#DISCOVERED_BSSIDS[@]} == 0 )); then
+    log_msg "⚠️  nmcli found nothing, falling back to iw scan"
+    iw dev "$INTERFACE" scan 2>/dev/null | awk -v target="$ss" '
+      /^BSS/ { bssid=$2 }
+      /SSID:/ { ssid=$2 }
+      /signal:/ { sig=$2 }
+      bssid && ssid==target {
+        printf "%s %s %s\n", bssid, ssid, sig
+        bssid=""; ssid=""; sig=""
+      }
+    ' | while read -r bssid ssid sig; do
+      [[ -z "$bssid" || -z "$sig" ]] && continue
+      local signal_dbm="${sig%.*}"   # iw already gives dBm
       (( signal_dbm >= MIN_SIGNAL_THRESHOLD )) || continue
-      
-      DISCOVERED_BSSIDS["$bssid"]="$ss"
+      DISCOVERED_BSSIDS["$bssid"]="$ssid"
       BSSID_SIGNALS["$bssid"]="$signal_dbm"
-      log_msg "📡 Found BSSID: $bssid (Signal: ${signal_dbm} dBm, ${signal_percent}%)"
-      
-    done < "$scan_output"
-    rm -f "$scan_output"
+      log_msg "📡 Found BSSID (iw): $bssid (Signal: ${signal_dbm} dBm)"
+    done
   fi
 
   LAST_SCAN_TIME="$now"
   local count=${#DISCOVERED_BSSIDS[@]}
-  
+
   if (( count == 0 )); then
     log_msg "❌ No BSSIDs found for SSID: $ss"
     return 1
   elif (( count == 1 )); then
-    log_msg "ℹ️  Single BSSID found - roaming not possible"
+    log_msg "ℹ️ Single BSSID found - roaming not possible"
   else
     log_msg "✅ Multiple BSSIDs found ($count) - roaming enabled!"
-    for b in "${!DISCOVERED_BSSIDS[@]}"; do 
+    for b in "${!DISCOVERED_BSSIDS[@]}"; do
       log_msg "   Available: $b (${BSSID_SIGNALS[$b]} dBm)"
     done
   fi
   return 0
 }
+
+
 
 select_roaming_target() {
   local cur="$1" best="" best_sig=-100
