@@ -17,6 +17,11 @@ INTERFACE="${INTERFACE:-wlan0}"
 HOSTNAME="${WIFI_GOOD_HOSTNAME:-${HOSTNAME:-CNXNMist-WiFiGood}}"
 LOG_MAX_SIZE_BYTES="${LOG_MAX_SIZE_BYTES:-10485760}"   # 10MB default
 
+# Ensure system hostname is set correctly (avoid inheriting wired hostname)
+if command -v hostnamectl >/dev/null 2>&1; then
+  sudo hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || true
+fi
+
 # Trap errors but DO NOT exit service
 trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec line=$LINENO" | tee -a "$LOG_FILE"' ERR
 
@@ -229,6 +234,14 @@ discover_bssids_for_ssid() {
   DISCOVERED_BSSIDS=(); BSSID_SIGNALS=()
   
   # Use nmcli for more reliable BSSID detection
+  # Explicitly rescan on chosen band(s)
+  case "$WIFI_BAND_PREFERENCE" in
+    2.4) nmcli device wifi rescan ifname "$INTERFACE" freq $(freqs_for_band 2.4) >/dev/null 2>&1 ;;
+    5)   nmcli device wifi rescan ifname "$INTERFACE" freq $(freqs_for_band 5)   >/dev/null 2>&1 ;;
+    both) nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1 ;;  # full-band scan
+    *)   nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1 ;;
+  esac
+  sleep 2
   local scan_output="/tmp/scan_${INTERFACE}_$$"
   if nmcli device wifi list ifname "$INTERFACE" > "$scan_output" 2>/dev/null; then
     while read -r line; do

@@ -4,11 +4,18 @@ set -euo pipefail
 # Wi-Fi Bad Client - Simplified and Fixed
 # Generates authentication failures for security testing
 
+
+
 INTERFACE="${INTERFACE:-wlan1}"
 HOSTNAME="CNXNMist-WiFiBad"
 LOG_FILE="/home/pi/wifi_test_dashboard/logs/wifi-bad.log"
 CONFIG_FILE="/home/pi/wifi_test_dashboard/configs/ssid.conf"
 SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
+
+# Ensure system hostname is set correctly
+if command -v hostnamectl >/dev/null 2>&1; then
+  sudo hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || true
+fi
 
 # Keep service alive on errors
 set +e
