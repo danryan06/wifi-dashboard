@@ -228,22 +228,23 @@ discover_bssids_for_ssid() {
     log_msg "📊 Processing scan results..."
   fi
 
-  # CRITICAL FIX: Process scan results with proper field parsing
-  # nmcli -t output format: BSSID:SSID:SIGNAL where BSSID contains colons
-  # Example: A8:3A:79:AE:F2:E1:Ryan:100
-  # We need to split differently since BSSID has 5 colons
+  # CRITICAL FIX: Process scan results with escaped colon handling
+  # nmcli -t output format: XX\:XX\:XX\:XX\:XX\:XX:SSID:SIGNAL (note escaped colons in BSSID)
   while IFS= read -r line; do
     # Skip empty lines
     [[ -n "$line" ]] || continue
     
-    # FIXED: Parse nmcli format correctly - BSSID has 5 colons, so split accordingly
-    # Format: XX:XX:XX:XX:XX:XX:SSID:SIGNAL
-    if [[ "$line" =~ ^([0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}):(.+):([0-9]+)$ ]]; then
-      local bssid="${BASH_REMATCH[1]}"
+    # FIXED: Parse nmcli format with escaped colons in BSSID
+    # Format: XX\:XX\:XX\:XX\:XX\:XX:SSID:SIGNAL
+    if [[ "$line" =~ ^([0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}):(.+):([0-9]+)$ ]]; then
+      local bssid_escaped="${BASH_REMATCH[1]}"
       local ssid="${BASH_REMATCH[2]}"
       local signal="${BASH_REMATCH[3]}"
       
-      log_msg "🔍 Parsed: BSSID=$bssid SSID='$ssid' SIGNAL=$signal vs target='$target_ssid'"
+      # Convert escaped BSSID to normal format
+      local bssid="${bssid_escaped//\\:/:}"
+      
+      log_msg "✅ Parsed: BSSID=$bssid SSID='$ssid' SIGNAL=$signal vs target='$target_ssid'"
       
       # CRITICAL: Exact SSID match
       if [[ "$ssid" == "$target_ssid" ]]; then
@@ -252,7 +253,7 @@ discover_bssids_for_ssid() {
         if (( signal_dbm >= MIN_SIGNAL_THRESHOLD )); then
           DISCOVERED_BSSIDS["$bssid"]="$ssid"
           BSSID_SIGNALS["$bssid"]="$signal_dbm"
-          log_msg "✅ Found matching BSSID: $bssid (Signal: ${signal_dbm} dBm, ${signal}%)"
+          log_msg "🎯 Found matching BSSID: $bssid (Signal: ${signal_dbm} dBm, ${signal}%)"
         else
           log_msg "🔸 Found weak BSSID: $bssid (Signal: ${signal_dbm} dBm, too weak)"
         fi
