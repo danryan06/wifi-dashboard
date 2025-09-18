@@ -339,52 +339,62 @@ prune_same_ssid_profiles() {
       done
 }
 
-# CRITICAL FIX: BSSID connect with proper variable handling
 connect_locked_bssid() {
   local bssid="$1" 
   local ssid="$2" 
   local psk="$3"
   
-  # CRITICAL: Validate all inputs
-  if [[ -z "$bssid" ]]; then
-    log_msg "❌ connect_locked_bssid: missing BSSID parameter"
+  # Validate inputs
+  if [[ -z "$bssid" || -z "$ssid" || -z "$psk" ]]; then
+    log_msg "❌ connect_locked_bssid: missing parameter(s)"
     return 1
   fi
-  if [[ -z "$ssid" ]]; then
-    log_msg "❌ connect_locked_bssid: missing SSID parameter"
-    return 1
-  fi
-  if [[ -z "$psk" ]]; then
-    log_msg "❌ connect_locked_bssid: missing password parameter"
-    return 1
-  fi
-  
+
   log_msg "🔗 Connecting to BSSID $bssid (SSID: '$ssid')"
-  
+
   prune_same_ssid_profiles "$ssid"
   $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
   sleep 2
-  
+
   local OUT
-  # CRITICAL FIX: Use proper variable substitution and quotes
   if OUT="$($SUDO nmcli --wait 45 device wifi connect "${ssid}" password "${psk}" ifname "$INTERFACE" bssid "${bssid}" 2>&1)"; then
     log_msg "✅ BSSID connect success: ${OUT}"
   else
     log_msg "❌ BSSID connect failed: ${OUT}"
     return 1
   fi
-  
+
   sleep 3
   local new_bssid
   new_bssid="$(iw dev "$INTERFACE" link 2>/dev/null | awk '/Connected to/{print tolower($3)}')"
+
   if [[ "$new_bssid" == "${bssid,,}" ]]; then
     log_msg "✅ BSSID verified: $new_bssid"
     return 0
   else
     log_msg "❌ BSSID verify mismatch (got: ${new_bssid:-unknown}, expected: ${bssid,,})"
-    return 1
+    log_msg "⚠️ Falling back to iw dev connect method"
+
+    # Hard disconnect + iw connect
+    $SUDO iw dev "$INTERFACE" disconnect || true
+    sleep 1
+    if $SUDO iw dev "$INTERFACE" connect -w "$ssid" "$bssid" >/dev/null 2>&1; then
+      sleep 3
+      new_bssid="$(iw dev "$INTERFACE" link 2>/dev/null | awk '/Connected to/{print tolower($3)}')"
+      if [[ "$new_bssid" == "${bssid,,}" ]]; then
+        log_msg "✅ iw dev connect successful, now on $new_bssid"
+        return 0
+      else
+        log_msg "❌ iw dev connect attempted but still not on expected BSSID (got: ${new_bssid:-unknown})"
+        return 1
+      fi
+    else
+      log_msg "❌ iw dev connect command failed"
+      return 1
+    fi
   fi
 }
+
 
 select_roaming_target() {
   local cur="$1" best="" best_sig=-100
