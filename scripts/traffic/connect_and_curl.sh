@@ -228,21 +228,24 @@ discover_bssids_for_ssid() {
     log_msg "📊 Processing scan results..."
   fi
 
-  # CRITICAL FIX: Process scan results with escaped colon handling
+  # FIXED: Process scan results with escaped colon handling + empty SSID support
   # nmcli -t output format: XX\:XX\:XX\:XX\:XX\:XX:SSID:SIGNAL (note escaped colons in BSSID)
   while IFS= read -r line; do
     # Skip empty lines
     [[ -n "$line" ]] || continue
     
-    # FIXED: Parse nmcli format with escaped colons in BSSID
-    # Format: XX\:XX\:XX\:XX\:XX\:XX:SSID:SIGNAL
-    if [[ "$line" =~ ^([0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}):(.+):([0-9]+)$ ]]; then
+    # FIXED: Parse nmcli format with escaped colons in BSSID + handle empty SSIDs
+    # Format: XX\:XX\:XX\:XX\:XX\:XX:SSID:SIGNAL (SSID can be empty)
+    if [[ "$line" =~ ^([0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}):([^:]*):([0-9]+)$ ]]; then
       local bssid_escaped="${BASH_REMATCH[1]}"
       local ssid="${BASH_REMATCH[2]}"
       local signal="${BASH_REMATCH[3]}"
       
       # Convert escaped BSSID to normal format
       local bssid="${bssid_escaped//\\:/:}"
+      
+      # Skip empty SSIDs (hidden networks)
+      [[ -n "$ssid" ]] || continue
       
       log_msg "✅ Parsed: BSSID=$bssid SSID='$ssid' SIGNAL=$signal vs target='$target_ssid'"
       
@@ -259,7 +262,10 @@ discover_bssids_for_ssid() {
         fi
       fi
     else
-      log_msg "⚠️ Could not parse line: $line"
+      # Only log if it's not an obvious empty SSID case
+      if [[ ! "$line" =~ ::.*$ ]]; then
+        log_msg "⚠️ Could not parse line: $line"
+      fi
     fi
   done <<< "$scan_output"
 
