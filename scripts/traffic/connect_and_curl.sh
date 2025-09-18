@@ -68,7 +68,7 @@ MAX_RETRIES="${WIFI_MAX_RETRY_ATTEMPTS:-3}"
 # Roaming config
 ROAMING_ENABLED="${WIFI_ROAMING_ENABLED:-true}"
 ROAMING_INTERVAL="${WIFI_ROAMING_INTERVAL:-120}"
-ROAMING_SCAN_INTERVAL="${WIFI_ROAMING_SCAN_INTERVAL:-30}"
+ROAMING_SCAN_INTERVAL="${WIFI_ROAMING_SCAN_INTERVAL:-10}"  # Scan more frequently
 MIN_SIGNAL_THRESHOLD="${WIFI_MIN_SIGNAL_THRESHOLD:--75}"
 ROAMING_SIGNAL_DIFF="${WIFI_ROAMING_SIGNAL_DIFF:-10}"
 WIFI_BAND_PREFERENCE="${WIFI_BAND_PREFERENCE:-both}"
@@ -225,30 +225,40 @@ discover_bssids_for_ssid() {
   if [[ -z "$scan_output" ]]; then
     log_msg "❌ nmcli wifi list returned no results"
   else
-    log_msg "📊 Raw scan data preview:"
-    echo "$scan_output" | head -5 | while IFS=: read -r bssid ssid signal; do
-      log_msg "   Raw: BSSID=$bssid SSID='$ssid' SIGNAL=$signal"
-    done
+    log_msg "📊 Processing scan results..."
   fi
 
-  # Process scan results
-  while IFS=: read -r bssid ssid signal; do
+  # CRITICAL FIX: Process scan results with proper field parsing
+  # nmcli -t output format: BSSID:SSID:SIGNAL where BSSID contains colons
+  # Example: A8:3A:79:AE:F2:E1:Ryan:100
+  # We need to split differently since BSSID has 5 colons
+  while IFS= read -r line; do
     # Skip empty lines
-    [[ -n "$bssid" && -n "$ssid" && -n "$signal" ]] || continue
+    [[ -n "$line" ]] || continue
     
-    log_msg "🔍 Checking: BSSID=$bssid SSID='$ssid' vs target='$target_ssid'"
-    
-    # CRITICAL: Exact SSID match
-    if [[ "$ssid" == "$target_ssid" ]]; then
-      # Convert signal percentage to dBm
-      local signal_dbm=$(( signal / 2 - 100 ))
-      if (( signal_dbm >= MIN_SIGNAL_THRESHOLD )); then
-        DISCOVERED_BSSIDS["$bssid"]="$ssid"
-        BSSID_SIGNALS["$bssid"]="$signal_dbm"
-        log_msg "✅ Found matching BSSID: $bssid (Signal: ${signal_dbm} dBm, ${signal}%)"
-      else
-        log_msg "🔸 Found weak BSSID: $bssid (Signal: ${signal_dbm} dBm, too weak)"
+    # FIXED: Parse nmcli format correctly - BSSID has 5 colons, so split accordingly
+    # Format: XX:XX:XX:XX:XX:XX:SSID:SIGNAL
+    if [[ "$line" =~ ^([0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}):(.+):([0-9]+)$ ]]; then
+      local bssid="${BASH_REMATCH[1]}"
+      local ssid="${BASH_REMATCH[2]}"
+      local signal="${BASH_REMATCH[3]}"
+      
+      log_msg "🔍 Parsed: BSSID=$bssid SSID='$ssid' SIGNAL=$signal vs target='$target_ssid'"
+      
+      # CRITICAL: Exact SSID match
+      if [[ "$ssid" == "$target_ssid" ]]; then
+        # Convert signal percentage to dBm
+        local signal_dbm=$(( signal / 2 - 100 ))
+        if (( signal_dbm >= MIN_SIGNAL_THRESHOLD )); then
+          DISCOVERED_BSSIDS["$bssid"]="$ssid"
+          BSSID_SIGNALS["$bssid"]="$signal_dbm"
+          log_msg "✅ Found matching BSSID: $bssid (Signal: ${signal_dbm} dBm, ${signal}%)"
+        else
+          log_msg "🔸 Found weak BSSID: $bssid (Signal: ${signal_dbm} dBm, too weak)"
+        fi
       fi
+    else
+      log_msg "⚠️ Could not parse line: $line"
     fi
   done <<< "$scan_output"
 
@@ -371,12 +381,22 @@ connect_locked_bssid() {
 
 select_roaming_target() {
   local cur="$1" best="" best_sig=-100
+  local current_sig="${BSSID_SIGNALS[$cur]:-$MIN_SIGNAL_THRESHOLD}"
+  
   for b in "${!DISCOVERED_BSSIDS[@]}"; do
     [[ "$b" == "$cur" ]] && continue
     local s="${BSSID_SIGNALS[$b]}"
+    
+    # Only consider BSSIDs above threshold AND significantly better than current
     (( s > MIN_SIGNAL_THRESHOLD )) || continue
-    if (( s > best_sig )); then best_sig=$s; best="$b"; fi
+    (( s > current_sig + ROAMING_SIGNAL_DIFF )) || continue
+    
+    if (( s > best_sig )); then 
+      best_sig=$s
+      best="$b"
+    fi
   done
+  
   [[ -n "$best" ]] && echo "$best" || echo ""
 }
 
@@ -486,6 +506,11 @@ connect_to_wifi_with_roaming() {
   fi
 
   log_msg "✅ Successfully connected to '$local_ssid' (BSSID=${CURRENT_BSSID:-unknown})"
+  
+  # ENHANCED: Immediately discover other BSSIDs for roaming after successful connection
+  log_msg "🔍 Performing initial BSSID discovery for roaming..."
+  discover_bssids_for_ssid "$local_ssid" || true
+  
   return 0
 }
 
@@ -502,7 +527,7 @@ manage_roaming() {
     return 0
   fi
 
-  # Keep the candidate list fresh
+  # ALWAYS keep the candidate list fresh - not just when roaming
   discover_bssids_for_ssid "$SSID" || return 0
 
   if should_perform_roaming; then
@@ -512,6 +537,10 @@ manage_roaming() {
     local target
     target="$(select_roaming_target "$CURRENT_BSSID")"
     if [[ -n "$target" ]]; then
+      local target_signal="${BSSID_SIGNALS[$target]}"
+      local current_signal="${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown}"
+      log_msg "🔄 Roaming candidate: $target (${target_signal}dBm) vs current $CURRENT_BSSID (${current_signal}dBm)"
+      
       if perform_roaming "$target" "$SSID" "$PASSWORD"; then
         log_msg "✅ Roaming completed successfully"
       else
