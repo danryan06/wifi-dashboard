@@ -339,12 +339,15 @@ prune_same_ssid_profiles() {
       done
 }
 
+# Globals
+TOTAL_DOWN=0
+TOTAL_UP=0
+
 connect_locked_bssid() {
   local bssid="$1" 
   local ssid="$2" 
   local psk="$3"
-  
-  # Validate inputs
+
   if [[ -z "$bssid" || -z "$ssid" || -z "$psk" ]]; then
     log_msg "❌ connect_locked_bssid: missing parameter(s)"
     return 1
@@ -357,7 +360,7 @@ connect_locked_bssid() {
   sleep 2
 
   local OUT
-  if OUT="$($SUDO nmcli --wait 45 device wifi connect "${ssid}" password "${psk}" ifname "$INTERFACE" bssid "${bssid}" 2>&1)"; then
+  if OUT="$($SUDO nmcli --wait 45 device wifi connect "$ssid" password "$psk" ifname "$INTERFACE" bssid "$bssid" 2>&1)"; then
     log_msg "✅ BSSID connect success: ${OUT}"
   else
     log_msg "❌ BSSID connect failed: ${OUT}"
@@ -374,8 +377,6 @@ connect_locked_bssid() {
   else
     log_msg "❌ BSSID verify mismatch (got: ${new_bssid:-unknown}, expected: ${bssid,,})"
     log_msg "⚠️ Falling back to iw dev connect method"
-
-    # Hard disconnect + iw connect
     $SUDO iw dev "$INTERFACE" disconnect || true
     sleep 1
     if $SUDO iw dev "$INTERFACE" connect -w "$ssid" "$bssid" >/dev/null 2>&1; then
@@ -384,15 +385,56 @@ connect_locked_bssid() {
       if [[ "$new_bssid" == "${bssid,,}" ]]; then
         log_msg "✅ iw dev connect successful, now on $new_bssid"
         return 0
-      else
-        log_msg "❌ iw dev connect attempted but still not on expected BSSID (got: ${new_bssid:-unknown})"
-        return 1
       fi
-    else
-      log_msg "❌ iw dev connect command failed"
-      return 1
     fi
+    return 1
   fi
+}
+
+generate_realistic_traffic() {
+  if [[ "$ENABLE_INTEGRATED_TRAFFIC" != "true" ]]; then return 0; fi
+
+  local st ip ss
+  st="$(nm_state)"; ip="$(current_ip)"; ss="$(current_ssid)"
+  if [[ "$st" != "100" || -z "$ip" || "$ss" != "$SSID" ]]; then
+    log_msg "⚠️ Traffic suppressed: link not healthy"
+    return 1
+  fi
+
+  log_msg "🚀 Starting realistic traffic generation (intensity: $TRAFFIC_INTENSITY)..."
+
+  if ! test_basic_connectivity; then
+    log_msg "❌ Basic connectivity failed; skipping traffic"
+    return 1
+  fi
+
+  # Download
+  local url="${DOWNLOAD_URLS[$((RANDOM % ${#DOWNLOAD_URLS[@]}))]}"
+  local tmp_file="/tmp/test.$$"
+  if curl --interface "$INTERFACE" -fsSL --max-time 30 -o "$tmp_file" "$url"; then
+    local bytes=$(stat -c%s "$tmp_file" 2>/dev/null || stat -f%z "$tmp_file")
+    TOTAL_DOWN=$((TOTAL_DOWN + bytes))
+    log_msg "✅ Downloaded $bytes bytes"
+    rm -f "$tmp_file"
+  fi
+
+  # Upload
+  local upload_url="https://httpbin.org/post"
+  dd if=/dev/zero bs=1K count=100 2>/dev/null | \
+    curl --interface "$INTERFACE" -fsSL --max-time 15 -X POST -o /dev/null "$upload_url" --data-binary @-
+  if [[ $? -eq 0 ]]; then
+    local up_bytes=$((100*1024))
+    TOTAL_UP=$((TOTAL_UP + up_bytes))
+    log_msg "✅ Uploaded $up_bytes bytes"
+  fi
+
+  # Update dashboard JSON
+  echo "{\"download\": $TOTAL_DOWN, \"upload\": $TOTAL_UP}" > "$DASHBOARD_DIR/status_${INTERFACE}.json"
+
+  timeout 30 ping -I "$INTERFACE" -c "$PING_COUNT" -i 0.5 8.8.8.8 >/dev/null && \
+    log_msg "✅ Ping traffic successful"
+
+  log_msg "✅ Realistic traffic generation completed"
 }
 
 
