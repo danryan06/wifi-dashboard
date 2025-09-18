@@ -65,12 +65,12 @@ REFRESH_INTERVAL="${WIFI_GOOD_REFRESH_INTERVAL:-60}"
 CONNECTION_TIMEOUT="${WIFI_CONNECTION_TIMEOUT:-30}"
 MAX_RETRIES="${WIFI_MAX_RETRY_ATTEMPTS:-3}"
 
-# Roaming config
+# Roaming config (AGGRESSIVE FOR DEMO)
 ROAMING_ENABLED="${WIFI_ROAMING_ENABLED:-true}"
-ROAMING_INTERVAL="${WIFI_ROAMING_INTERVAL:-120}"
+ROAMING_INTERVAL="${WIFI_ROAMING_INTERVAL:-60}"  # Roam every 60 seconds for active demo
 ROAMING_SCAN_INTERVAL="${WIFI_ROAMING_SCAN_INTERVAL:-10}"  # Scan more frequently
 MIN_SIGNAL_THRESHOLD="${WIFI_MIN_SIGNAL_THRESHOLD:--75}"
-ROAMING_SIGNAL_DIFF="${WIFI_ROAMING_SIGNAL_DIFF:-10}"
+ROAMING_SIGNAL_DIFF="${WIFI_ROAMING_SIGNAL_DIFF:-5}"  # Reduced for more roaming
 WIFI_BAND_PREFERENCE="${WIFI_BAND_PREFERENCE:-both}"
 
 # Traffic config
@@ -375,7 +375,7 @@ connect_locked_bssid() {
     log_msg "✅ BSSID verified: $new_bssid"
     return 0
   else
-    log_msg "❌ BSSID verify mismatch (got: ${new_bssid:-unknown}, expected: $bssid)"
+    log_msg "❌ BSSID verify mismatch (got: ${new_bssid:-unknown}, expected: ${bssid,,})"
     return 1
   fi
 }
@@ -388,10 +388,11 @@ select_roaming_target() {
     [[ "$b" == "$cur" ]] && continue
     local s="${BSSID_SIGNALS[$b]}"
     
-    # Only consider BSSIDs above threshold AND significantly better than current
+    # Only consider BSSIDs above threshold
     (( s > MIN_SIGNAL_THRESHOLD )) || continue
-    (( s > current_sig + ROAMING_SIGNAL_DIFF )) || continue
     
+    # For demo purposes: roam to any good BSSID, not just significantly better ones
+    # This ensures active roaming for PoC demonstrations
     if (( s > best_sig )); then 
       best_sig=$s
       best="$b"

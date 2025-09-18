@@ -306,4 +306,17 @@ for iface in eth0 wlan0 wlan1; do
     fi
 done
 
+# Configure PoE HAT fan for demo operation
+log_info "Configuring PoE HAT fan for demo operation..."
+if [[ -f /sys/class/thermal/cooling_device0/type ]] && grep -q "rpi-poe-fan" /sys/class/thermal/cooling_device0/type 2>/dev/null; then
+    # PoE HAT detected, configure fan
+    if curl -sSL https://raw.githubusercontent.com/danryan06/wifi-dashboard/main/scripts/utils/poe_fan_control.sh | bash; then
+        log_info "✓ PoE HAT fan configured for quieter demo operation"
+    else
+        log_warn "✗ PoE HAT fan configuration failed"
+    fi
+else
+    log_info "ℹ️ No PoE HAT detected, skipping fan configuration"
+fi
+
 log_info "✓ System dependencies installation completed successfully"
