@@ -46,23 +46,23 @@ EOF
 # Helpers
 # ───────────────────────────────────────────────────────────────────────────────
 download_to() {
-  # download_to <remote_path_relative_to_repo> <local_path>
-  local remote="${1:-}" local_path="${2:-}"
+  local file="${1:-}"
+  local target="${2:-}"
+  local attempt=0
 
-  if [[ -z "$remote" || -z "$local_path" ]]; then
-    log_error "download_to called without proper arguments (got: '$remote', '$local_path')"
+  if [[ -z "$file" || -z "$target" ]]; then
+    log_error "download_to called without required arguments (file='$file', target='$target')"
     return 1
   fi
 
-  local url="${REPO_URL}/scripts/install/${remote}"
-  local attempts=0
-  while (( attempts < 3 )); do
-    if curl -fsSL --max-time 30 "$url" -o "$local_path"; then
-      chmod +x "$local_path"
+  while (( attempt < 3 )); do
+    attempt=$(( attempt + 1 ))
+    if curl -fsSL "${REPO_URL:-}/$file" -o "$target"; then
       return 0
+    else
+      log_warn "Download attempt $attempt for $file failed, retrying..."
+      sleep 2
     fi
-    attempts=$((attempts+1))
-    sleep 2
   done
   return 1
 }
