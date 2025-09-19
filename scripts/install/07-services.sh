@@ -116,6 +116,7 @@ WorkingDirectory=${DASHBOARD_DIR}
 Environment=HOSTNAME=CNXNMist-WiFiGood
 Environment=INTERFACE=${GOOD_IFACE}
 Environment=WIFI_GOOD_INTERFACE=${GOOD_IFACE}
+Environment=WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood
 ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/connect_and_curl.sh
 Restart=always
 RestartSec=20
@@ -144,6 +145,7 @@ WorkingDirectory=${DASHBOARD_DIR}
 Environment=HOSTNAME=CNXNMist-WiFiBad
 Environment=INTERFACE=${BAD_IFACE}
 Environment=WIFI_BAD_INTERFACE=${BAD_IFACE}
+Environment=WIFI_BAD_HOSTNAME=CNXNMist-WiFiBad
 ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/fail_auth_loop.sh
 Restart=always
 RestartSec=25
