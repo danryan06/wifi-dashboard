@@ -164,23 +164,24 @@ ensure_fresh_install_state() {
 main_installation_sequence() {
   log_step "Starting enhanced installation sequence..."
 
-  run_install_script "01-dependencies-enhanced.sh" "Installing system dependencies with NetworkManager fixes"
+  # Include full paths to match your repository structure
+  run_install_script "scripts/install/01-dependencies-enhanced.sh" "Installing system dependencies with NetworkManager fixes"
   sleep 2
 
-  run_install_script "02-cleanup.sh"              "Cleaning up previous installations"
+  run_install_script "scripts/install/02-cleanup.sh"              "Cleaning up previous installations"
   sleep 1
 
-  run_install_script "03-directories.sh"          "Creating directory structure and baseline configuration"
+  run_install_script "scripts/install/03-directories.sh"          "Creating directory structure and baseline configuration"
 
-  run_install_script "04.5-auto-interface-assignment.sh" "Auto-detecting and assigning network interfaces"
+  run_install_script "scripts/install/04.5-auto-interface-assignment.sh" "Auto-detecting and assigning network interfaces"
   sleep 2
 
-  run_install_script "04-flask-app.sh"            "Installing Flask application"
-  run_install_script "05-templates.sh"            "Installing web interface templates"
-  run_install_script "06-traffic-scripts.sh"      "Installing traffic generation scripts"
-  run_install_script "07-services.sh"             "Creating and configuring systemd services"
+  run_install_script "scripts/install/04-flask-app.sh"            "Installing Flask application"
+  run_install_script "scripts/install/05-templates.sh"            "Installing web interface templates"
+  run_install_script "scripts/install/06-traffic-scripts.sh"      "Installing traffic generation scripts"
+  run_install_script "scripts/install/07-services.sh"             "Creating and configuring systemd services"
   sleep 2
-  run_install_script "08-finalize.sh"             "Finalizing installation with hostname verification"
+  run_install_script "scripts/install/08-finalize.sh"             "Finalizing installation with hostname verification"
 }
 
 # ───────────────────────────────────────────────────────────────────────────────
