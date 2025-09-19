@@ -176,7 +176,7 @@ def get_network_stats():
 
 def read_persistent_stats(interface):
     """Read persistent stats from client-generated JSON files"""
-    stats_file = os.path.join(BASE_DIR, f"stats_{interface}.json")
+    stats_file = os.path.join(BASE_DIR, "stats", f"stats_{interface}.json")
     try:
         if os.path.exists(stats_file):
             with open(stats_file, 'r') as f:

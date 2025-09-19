@@ -107,6 +107,12 @@ systemctl start wifi-dashboard.service || log_warn "Failed to start wifi-dashboa
 log_info "Starting wired test service..."
 systemctl start wired-test.service || log_warn "Failed to start wired-test"
 
+# Ensure stats directory exists for persistent client stats
+STATS_DIR="/home/pi/wifi_test_dashboard/stats"
+mkdir -p "$STATS_DIR"
+chown pi:pi "$STATS_DIR"
+chmod 755 "$STATS_DIR"
+
 # Skip Wi-Fi until SSID is configured
 log_info "Skipping Wi-Fi client startup until SSID is configured"
 log_info "Hostname verification will run after Wi-Fi config is saved"
