@@ -69,7 +69,9 @@ download_to() {
 
 run_install_script() {
   # run_install_script <filename> <description>
-  local script="${1:-}" desc="${2:-}"
+  set +u
+  local script="$1" desc="$2"
+  set -u
 
   if [[ -z "$script" || -z "$desc" ]]; then
     log_error "run_install_script called without proper arguments (got: '$script', '$desc')"
