@@ -122,3 +122,8 @@ host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 log_info "✓ Installation finalized successfully"
 [[ -n "${host_ip:-}" ]] && log_info "✓ Dashboard available at: http://${host_ip}:5000"
 log_info "✓ Use check_status.sh or verify-hostnames.sh after Wi-Fi config to confirm identities"
+
+# Friendly validation guidance
+log_warn "Some checks (like Wi-Fi hostname separation) may show as missing on a fresh install."
+log_warn "This is expected until SSID configuration is applied via the dashboard."
+log_info "ℹ️  If this is your first installation, you can safely ignore validation warnings."

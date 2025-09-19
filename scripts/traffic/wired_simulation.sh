@@ -8,8 +8,10 @@ INTERFACE="eth0"
 HOSTNAME="CNXNMist-Wired"
 LOG_FILE="/home/pi/wifi_test_dashboard/logs/wired.log"
 SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
+DASHBOARD_DIR="/home/pi/wifi_test_dashboard"
 mkdir -p "$DASHBOARD_DIR/stats"
-STATS_FILE="$DASHBOARD_DIR/stats/stats_eth0.json"
+STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE:-eth0}.json"
+
 
 # Keep service alive on errors
 set +e

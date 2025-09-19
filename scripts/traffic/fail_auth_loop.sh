@@ -9,8 +9,10 @@ HOSTNAME="CNXNMist-WiFiBad"
 LOG_FILE="/home/pi/wifi_test_dashboard/logs/wifi-bad.log"
 CONFIG_FILE="/home/pi/wifi_test_dashboard/configs/ssid.conf"
 SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
+DASHBOARD_DIR="/home/pi/wifi_test_dashboard"
 mkdir -p "$DASHBOARD_DIR/stats"
 STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE:-wlan1}.json"
+
 
 
 # HOSTNAME LOCK SYSTEM - NEW
