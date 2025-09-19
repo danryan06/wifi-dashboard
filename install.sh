@@ -47,7 +47,13 @@ EOF
 # ───────────────────────────────────────────────────────────────────────────────
 download_to() {
   # download_to <remote_path_relative_to_repo> <local_path>
-  local remote="$1" local_path="$2"
+  local remote="${1:-}" local_path="${2:-}"
+
+  if [[ -z "$remote" || -z "$local_path" ]]; then
+    log_error "download_to called without proper arguments (got: '$remote', '$local_path')"
+    return 1
+  fi
+
   local url="${REPO_URL}/scripts/install/${remote}"
   local attempts=0
   while (( attempts < 3 )); do
@@ -63,15 +69,22 @@ download_to() {
 
 run_install_script() {
   # run_install_script <filename> <description>
-  local script="$1" desc="$2" path="${WORK_DIR}/${script}"
+  local script="${1:-}" desc="${2:-}"
+
+  if [[ -z "$script" || -z "$desc" ]]; then
+    log_error "run_install_script called without proper arguments (got: '$script', '$desc')"
+    exit 1
+  fi
+
+  local path="${WORK_DIR}/${script}"
   log_step "$desc"
   log_info "Downloading ${script} (attempt 1/3)..."
+
   if ! download_to "$script" "$path"; then
     log_error "❌ Failed to download ${script}"
     exit 1
   fi
 
-  # Pass env to the child scripts
   export PI_USER PI_HOME REPO_URL VERSION
 
   if bash "$path"; then
