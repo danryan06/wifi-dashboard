@@ -192,70 +192,89 @@ def read_persistent_stats(interface):
         return {'download': 0, 'upload': 0, 'timestamp': time.time()}
 
 def calculate_throughput():
-    """Calculate throughput based on /proc/net/dev deltas and integrated service status."""
+    """
+    Calculate throughput based on /proc/net/dev deltas and always include
+    known interfaces (eth0, good, bad) with persistent totals even if no delta.
+    """
     global last_stats, last_stats_time
 
-    current_stats = get_network_stats()
-    current_time = time.time()
+    now = time.time()
+    current_stats = get_network_stats()  # iface -> counters
     throughput = {}
 
-    # Build iface -> service map from assignments (integrated design)
+    # Build service map from assignments
     try:
         a = get_interface_assignments()
+        good_iface = a.get('good_interface', 'wlan0')
+        bad_iface  = a.get('bad_interface')
+        wired_iface = a.get('wired_interface', 'eth0')
+
         service_map = {
-            a.get('wired_interface', 'eth0'): 'wired-test',
-            a.get('good_interface',  'wlan0'): 'wifi-good',
+            wired_iface: 'wired-test',
+            good_iface:  'wifi-good',
         }
-        bad_iface = a.get('bad_interface')
         if bad_iface:
             service_map[bad_iface] = 'wifi-bad'
     except Exception:
-        service_map = {}
+        good_iface, bad_iface, wired_iface = 'wlan0', None, 'eth0'
+        service_map = {
+            'eth0': 'wired-test',
+            'wlan0': 'wifi-good'
+        }
 
-    if last_stats and (current_time - last_stats_time) > 0:
-        time_diff = current_time - last_stats_time
+    # Candidate ifaces we want to expose even without deltas
+    candidates = {wired_iface, good_iface}
+    if bad_iface:
+        candidates.add(bad_iface)
+    # Also include anything we actually saw in /proc/net/dev
+    candidates |= set(current_stats.keys())
 
-        for iface in current_stats:
-            if iface in last_stats:
-                current = current_stats[iface]
-                previous = last_stats[iface]
+    # Compute deltas where possible
+    have_prev = bool(last_stats) and last_stats_time > 0
+    dt = max(0.0001, now - (last_stats_time or now))  # avoid div/0
 
-                # bytes/sec
-                rx_rate = max(0, (current['rx_bytes'] - previous['rx_bytes']) / time_diff)
-                tx_rate = max(0, (current['tx_bytes'] - previous['tx_bytes']) / time_diff)
+    for iface in candidates:
+        cur = current_stats.get(iface)
+        prev = last_stats.get(iface) if have_prev else None
 
-                # integrated service active?
-                try:
-                    svc = service_map.get(iface, '')
-                    if svc:
-                        result = subprocess.run(
-                            ['systemctl', 'is-active', f'{svc}.service'],
-                            capture_output=True, text=True, timeout=2
-                        )
-                        is_active = (result.stdout.strip() == 'active')
-                    else:
-                        is_active = False
-                except Exception:
-                    is_active = False
+        if cur and prev:
+            rx_rate = max(0, (cur['rx_bytes'] - prev['rx_bytes']) / dt)  # bytes/s
+            tx_rate = max(0, (cur['tx_bytes'] - prev['tx_bytes']) / dt)
+            rx_pkts = max(0, (cur['rx_packets'] - prev['rx_packets']))
+            tx_pkts = max(0, (cur['tx_packets'] - prev['tx_packets']))
+        else:
+            rx_rate = tx_rate = 0.0
+            rx_pkts = tx_pkts = 0
 
-                # Read persistent stats for total counters
-                persistent_stats = read_persistent_stats(iface)
+        # Service active?
+        try:
+            svc = service_map.get(iface, '')
+            if svc:
+                r = subprocess.run(['systemctl', 'is-active', f'{svc}.service'],
+                                   capture_output=True, text=True, timeout=2)
+                active = (r.stdout.strip() == 'active')
+            else:
+                active = False
+        except Exception:
+            active = False
 
-                throughput[iface] = {
-                    'download': rx_rate,
-                    'upload': tx_rate,
-                    'active': is_active,
-                    'rx_packets': current['rx_packets'] - previous['rx_packets'],
-                    'tx_packets': current['tx_packets'] - previous['tx_packets'],
-                    'total_download': persistent_stats['download'],
-                    'total_upload': persistent_stats['upload'],
-                    'stats_timestamp': persistent_stats['timestamp']
-                }
+        # Persistent totals (these exist even if rate=0)
+        totals = read_persistent_stats(iface)
 
-    # Update last stats snapshot
+        throughput[iface] = {
+            'download': rx_rate,     # bytes/s (converted to Mbps by /api/throughput)
+            'upload': tx_rate,
+            'active': active,
+            'rx_packets': rx_pkts,
+            'tx_packets': tx_pkts,
+            'total_download': totals.get('download', 0),
+            'total_upload': totals.get('upload', 0),
+            'stats_timestamp': totals.get('timestamp', now),
+        }
+
+    # Snapshot for next pass
     last_stats = current_stats
-    last_stats_time = current_time
-
+    last_stats_time = now
     return throughput
 
 def get_system_info():
