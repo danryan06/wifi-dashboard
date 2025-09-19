@@ -140,30 +140,37 @@ run_install_script() {
     local script_name="$1"
     local description="$2"
     local script_path="/tmp/${script_name}"
-    
+
     log_step "$description"
-    
+
     # Download script
     if ! download_script "$script_name" "$script_path"; then
         log_error "Failed to download $script_name"
         return 1
     fi
-    
+
     # Set environment variables for the script
     export PI_USER="$PI_USER"
     export PI_HOME="$PI_HOME"
     export REPO_URL="$REPO_URL"
     export VERSION="$VERSION"
-    
+
     # Execute script with error handling
     if bash "$script_path"; then
         log_info "✅ Completed: $description"
         return 0
     else
+        # Special case: allow cleanup script to fail gracefully
+        if [[ "$script_name" == "02-cleanup.sh" ]]; then
+            log_warn "⚠ Cleanup script failed, continuing installation anyway"
+            return 0
+        fi
+
         log_error "❌ Failed: $description"
         return 1
     fi
 }
+
 
 # CRITICAL: Enhanced installation sequence with proper timing
 main_installation_sequence() {
