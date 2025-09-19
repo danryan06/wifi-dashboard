@@ -86,33 +86,15 @@ ensure_fresh_install_state() {
     rm -f /etc/NetworkManager/conf.d/dhcp-hostname-*.conf
     rm -rf /var/run/wifi-dashboard
     
-    # Remove any conflicting NetworkManager connections
+    # NetworkManager cleanup will be handled by 02-cleanup.sh
+    log_info "NetworkManager connection cleanup will be handled by cleanup script..."
+    
+    # Just disconnect interfaces for now
     if command -v nmcli >/dev/null 2>&1; then
-        log_info "Cleaning NetworkManager connections..."
-        
-        # More robust connection cleanup
-        local connections_output
-        if connections_output=$(nmcli connection show 2>/dev/null); then
-            local conflicting_connections
-            if conflicting_connections=$(echo "$connections_output" | grep -E "(CNXNMist|wifi-test|dashboard)" | awk '{print $1}' 2>/dev/null); then
-                if [[ -n "$conflicting_connections" ]]; then
-                    echo "$conflicting_connections" | while IFS= read -r conn; do
-                        if [[ -n "$conn" && "$conn" != "NAME" ]]; then
-                            log_info "Removing connection: $conn"
-                            nmcli connection delete "$conn" 2>/dev/null || log_warn "Failed to remove connection: $conn"
-                        fi
-                    done
-                else
-                    log_info "No conflicting connections found"
-                fi
-            else
-                log_info "No conflicting connections found"
-            fi
-        else
-            log_warn "Could not query NetworkManager connections"
-        fi
-    else
-        log_warn "NetworkManager not available"
+        for iface in wlan0 wlan1; do
+            nmcli device disconnect "$iface" 2>/dev/null || true
+        done
+        log_info "Disconnected Wi-Fi interfaces"
     fi
     
     # Stop any existing services
