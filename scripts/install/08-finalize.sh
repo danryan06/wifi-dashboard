@@ -33,6 +33,46 @@ find "${DASHBOARD_DIR}/scripts" -type f -name "*.sh" -exec chmod +x {} \; 2>/dev
 # Reload units in case prior steps wrote/changed them
 systemctl daemon-reload
 
+# Set up system hostname (one-time during installation)
+setup_system_hostname() {
+    local system_hostname="CNXNMist-Dashboard"
+    
+    log_info "Setting up system hostname: $system_hostname"
+    
+    # Only set if currently default Pi hostnames
+    local current_hostname=$(hostname)
+    if [[ "$current_hostname" == "localhost" ]] || [[ "$current_hostname" == "raspberrypi" ]] || [[ "$current_hostname" == "raspberry" ]]; then
+        
+        # Set system hostname via hostnamectl
+        if command -v hostnamectl >/dev/null 2>&1; then
+            hostnamectl set-hostname "$system_hostname" 2>/dev/null && \
+                log_info "✓ System hostname set: $system_hostname" || \
+                log_warn "Failed to set system hostname"
+        fi
+        
+        # Update /etc/hostname
+        echo "$system_hostname" > /etc/hostname && \
+            log_info "✓ Updated /etc/hostname" || \
+            log_warn "Failed to update /etc/hostname"
+        
+        # Fix /etc/hosts properly
+        cp /etc/hosts /etc/hosts.backup.$(date +%s) 2>/dev/null || true
+        
+        # Remove old 127.0.1.1 entries and add new one
+        sed -i '/^127\.0\.1\.1/d' /etc/hosts 2>/dev/null || true
+        echo "127.0.1.1    $system_hostname" >> /etc/hosts
+        
+        log_info "✓ System hostname configured for dashboard services"
+        log_info "✓ Services will use DHCP hostnames: CNXNMist-WiFiGood, CNXNMist-WiFiBad"
+        
+    else
+        log_info "System hostname already customized ($current_hostname), not changing"
+    fi
+}
+
+# Call the function during finalization
+setup_system_hostname
+
 # --- Start dashboard first (always safe) ---
 log_info "Starting dashboard service..."
 if systemctl start wifi-dashboard.service 2>/dev/null; then

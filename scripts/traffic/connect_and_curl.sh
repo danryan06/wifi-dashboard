@@ -92,7 +92,6 @@ set_device_hostname() {
     log_msg "✅ Updated /etc/hosts with: $desired_hostname"
     
     # Method 4: Set NetworkManager hostname for this connection
-    # This is crucial for DHCP hostname reporting
     local current_connection
     current_connection=$($SUDO nmcli -t -f NAME connection show --active 2>/dev/null | head -1 || echo "")
     
