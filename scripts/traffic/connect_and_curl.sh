@@ -18,6 +18,9 @@ INTERFACE="${INTERFACE:-wlan0}"
 HOSTNAME="${WIFI_GOOD_HOSTNAME:-${HOSTNAME:-CNXNMist-WiFiGood}}"
 LOG_MAX_SIZE_BYTES="${LOG_MAX_SIZE_BYTES:-10485760}"   # 10MB default
 
+# HOSTNAME LOCK SYSTEM - NEW ADDITION
+HOSTNAME_LOCK_DIR="/var/run/wifi-dashboard"
+HOSTNAME_LOCK_FILE="$HOSTNAME_LOCK_DIR/hostname-${INTERFACE}.lock"
 
 # Trap errors but DO NOT exit service
 trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec line=$LINENO" | tee -a "$LOG_FILE"' ERR
@@ -56,18 +59,85 @@ log_msg() {
   fi
 }
 
+# =============================================================================
+# HOSTNAME LOCK SYSTEM - NEW FUNCTIONS
+# =============================================================================
+
+acquire_hostname_lock() {
+    local interface="$1"
+    local desired_hostname="$2"
+    local max_wait=30
+    local wait_count=0
+    
+    log_msg "🔒 Acquiring hostname lock for $interface -> $desired_hostname"
+    
+    # Create lock directory
+    $SUDO mkdir -p "$HOSTNAME_LOCK_DIR"
+    
+    # Wait for any existing locks to clear
+    while [[ -f "$HOSTNAME_LOCK_FILE" && $wait_count -lt $max_wait ]]; do
+        local existing_lock
+        existing_lock=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
+        
+        if [[ "$existing_lock" == "${interface}:${desired_hostname}" ]]; then
+            log_msg "✅ Lock already held by this service"
+            return 0
+        fi
+        
+        log_msg "⏳ Waiting for hostname lock to clear: $existing_lock"
+        sleep 2
+        ((wait_count += 2))
+    done
+    
+    # Acquire the lock
+    echo "${interface}:${desired_hostname}:$(date +%s):$$" | $SUDO tee "$HOSTNAME_LOCK_FILE" >/dev/null
+    
+    # Verify we got the lock
+    local lock_content
+    lock_content=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
+    
+    if [[ "$lock_content" == "${interface}:${desired_hostname}:"* ]]; then
+        log_msg "✅ Hostname lock acquired successfully"
+        return 0
+    else
+        log_msg "❌ Failed to acquire hostname lock"
+        return 1
+    fi
+}
+
+release_hostname_lock() {
+    local interface="$1"
+    
+    if [[ -f "$HOSTNAME_LOCK_FILE" ]]; then
+        local lock_content
+        lock_content=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
+        
+        if [[ "$lock_content" == "${interface}:"* ]]; then
+            $SUDO rm -f "$HOSTNAME_LOCK_FILE"
+            log_msg "🔓 Released hostname lock for $interface"
+        fi
+    fi
+}
+
+# =============================================================================
+# ENHANCED HOSTNAME MANAGEMENT WITH LOCKS
+# =============================================================================
+
 set_device_hostname() {
     local desired_hostname="$1"
     local interface="$2"
+    
+    # ACQUIRE LOCK BEFORE HOSTNAME OPERATIONS
+    if ! acquire_hostname_lock "$interface" "$desired_hostname"; then
+        log_msg "❌ Cannot set hostname - failed to acquire lock"
+        return 1
+    fi
     
     log_msg "🏷️ Setting DHCP hostname to: $desired_hostname for interface $interface (NOT changing system hostname)"
     
     # Get the MAC address for this interface for logging
     local mac_addr=$(ip link show "$interface" 2>/dev/null | awk '/link\/ether/ {print $2}' || echo "unknown")
     log_msg "📱 Interface $interface MAC address: $mac_addr"
-    
-    # REMOVED: Don't set system hostname - causes conflicts between services
-    # Instead, only set DHCP hostname for this specific interface
     
     # Method 1: Set NetworkManager DHCP hostname for this interface
     log_msg "🌐 Setting DHCP hostname for interface $interface connections"
@@ -99,7 +169,6 @@ set_device_hostname() {
     return 0
 }
 
-# ADD this function after set_device_hostname() (around line 120):
 setup_system_hostname() {
     local system_hostname="${1:-CNXNMist-Dashboard}"
     
@@ -321,7 +390,7 @@ connect_with_hostname() {
     fi
 }
 
-# --- Load persistent stats ---
+# Load persistent stats
 load_stats() {
   if [[ -f "$STATS_FILE" ]]; then
     local stats_content
@@ -986,7 +1055,7 @@ main_loop() {
     done
 }
 
-# Enhanced setup function (add this before main_loop)
+# Enhanced setup function with hostname locks
 enhanced_good_client_setup() {
     log_msg "🚀 Starting enhanced good client with PROPER identity management"
     
@@ -998,7 +1067,7 @@ enhanced_good_client_setup() {
         log_msg "🏠 System hostname already set: $current_system_hostname (not changing)"
     fi
     
-    # Set DHCP hostname for THIS interface only
+    # Set DHCP hostname for THIS interface only (with lock protection)
     set_device_hostname "$HOSTNAME" "$INTERFACE"
     
     # Verify our identity
@@ -1009,9 +1078,14 @@ enhanced_good_client_setup() {
     log_msg "Persistent stats file: $STATS_FILE"
 }
 
+# Enhanced cleanup with lock release
 cleanup_and_exit() {
   log_msg "🧹 Cleaning up good client..."
   save_stats
+  
+  # RELEASE HOSTNAME LOCK
+  release_hostname_lock "$INTERFACE"
+  
   $SUDO nmcli device disconnect "$INTERFACE" 2>/dev/null || true
   log_msg "✅ Stopped (final stats saved: Down=${TOTAL_DOWN}B, Up=${TOTAL_UP}B)"
   exit 0
@@ -1022,8 +1096,6 @@ trap cleanup_and_exit SIGTERM SIGINT
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 log_msg "🚀 Enhanced Wi-Fi Good Client Starting..."
 log_msg "Interface: $INTERFACE | Hostname: $HOSTNAME"
-log_msg "Roaming: ${ROAMING_ENABLED} (interval ${ROAMING_INTERVAL}s; scan ${ROAMING_SCAN_INTERVAL}s; min ${MIN_SIGNAL_THRESHOLD}dBm)"
-log_msg "Persistent stats file: $STATS_FILE"
 
 # Initial config read
 if ! read_wifi_config; then

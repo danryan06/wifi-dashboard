@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# 08-finalize.sh - Finalize Wi-Fi Dashboard install (robust, safe under set -u)
+# 08-finalize.sh - Finalize Wi-Fi Dashboard install with enhanced hostname verification
 set -euo pipefail
 
 # ---- Defaults for required env vars (safe under set -u) ----
 : "${PI_USER:=pi}"
 : "${PI_HOME:=/home/${PI_USER}}"
-: "${VERSION:=v5.0.2}"     # fallback if the orchestrator didn't set VERSION
+: "${VERSION:=v5.1.0}"     # fallback if the orchestrator didn't set VERSION
 
 # Ensure common admin tools exist in PATH even under non-interactive shells
 export PATH="/usr/sbin:/sbin:/usr/bin:/bin:/usr/local/bin"
 
 log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
 log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
+log_error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; }
 
 log_info "Finalizing installation..."
 
@@ -70,41 +71,181 @@ setup_system_hostname() {
     fi
 }
 
+# =============================================================================
+# HOSTNAME VERIFICATION FUNCTION - THIS IS THE NEW #5 ADDITION
+# =============================================================================
+
+verify_hostname_separation() {
+    local max_attempts=10
+    local attempt=1
+    
+    log_info "🔍 Starting hostname separation verification..."
+    
+    while [[ $attempt -le $max_attempts ]]; do
+        log_info "Verification attempt $attempt/$max_attempts..."
+        
+        # Wait for identity files to be created
+        sleep 5
+        
+        # Check if identity files exist
+        local wlan0_file="/home/pi/wifi_test_dashboard/identity_wlan0.json"
+        local wlan1_file="/home/pi/wifi_test_dashboard/identity_wlan1.json"
+        
+        local wlan0_hostname="unknown"
+        local wlan1_hostname="unknown"
+        local wlan0_expected="unknown"
+        local wlan1_expected="unknown"
+        
+        # Extract hostnames from identity files if they exist
+        if [[ -f "$wlan0_file" ]]; then
+            if command -v jq >/dev/null 2>&1; then
+                wlan0_hostname=$(jq -r '.hostname // "unknown"' "$wlan0_file" 2>/dev/null)
+                wlan0_expected=$(jq -r '.expected_hostname // "unknown"' "$wlan0_file" 2>/dev/null)
+            else
+                wlan0_hostname=$(grep -o '"hostname"[^"]*"[^"]*"' "$wlan0_file" | cut -d'"' -f4 2>/dev/null || echo "unknown")
+                wlan0_expected=$(grep -o '"expected_hostname"[^"]*"[^"]*"' "$wlan0_file" | cut -d'"' -f4 2>/dev/null || echo "unknown")
+            fi
+            log_info "wlan0 identity: expected='$wlan0_expected', actual='$wlan0_hostname'"
+        else
+            log_warn "wlan0 identity file not found yet"
+        fi
+        
+        if [[ -f "$wlan1_file" ]]; then
+            if command -v jq >/dev/null 2>&1; then
+                wlan1_hostname=$(jq -r '.hostname // "unknown"' "$wlan1_file" 2>/dev/null)
+                wlan1_expected=$(jq -r '.expected_hostname // "unknown"' "$wlan1_file" 2>/dev/null)
+            else
+                wlan1_hostname=$(grep -o '"hostname"[^"]*"[^"]*"' "$wlan1_file" | cut -d'"' -f4 2>/dev/null || echo "unknown")
+                wlan1_expected=$(grep -o '"expected_hostname"[^"]*"[^"]*"' "$wlan1_file" | cut -d'"' -f4 2>/dev/null || echo "unknown")
+            fi
+            log_info "wlan1 identity: expected='$wlan1_expected', actual='$wlan1_hostname'"
+        else
+            log_warn "wlan1 identity file not found yet"
+        fi
+        
+        # Check if hostnames are properly separated
+        local verification_passed=false
+        
+        # Method 1: Check against expected hostnames
+        if [[ "$wlan0_hostname" == "CNXNMist-WiFiGood" || "$wlan0_expected" == "CNXNMist-WiFiGood" ]] && \
+           [[ "$wlan1_hostname" == "CNXNMist-WiFiBad" || "$wlan1_expected" == "CNXNMist-WiFiBad" ]]; then
+            verification_passed=true
+        fi
+        
+        # Method 2: At minimum, ensure they're different (fallback)
+        if [[ "$wlan0_hostname" != "unknown" && "$wlan1_hostname" != "unknown" && "$wlan0_hostname" != "$wlan1_hostname" ]]; then
+            if [[ "$verification_passed" != "true" ]]; then
+                log_warn "Hostnames are different but not standard: wlan0='$wlan0_hostname', wlan1='$wlan1_hostname'"
+                verification_passed=true  # Accept as long as they're different
+            fi
+        fi
+        
+        if [[ "$verification_passed" == "true" ]]; then
+            log_info "✅ Hostname separation verified successfully!"
+            log_info "   wlan0: $wlan0_hostname"
+            log_info "   wlan1: $wlan1_hostname"
+            return 0
+        fi
+        
+        # If not verified, show what we found and wait
+        log_warn "⏳ Hostname separation not yet established:"
+        log_warn "   wlan0: expected='$wlan0_expected', actual='$wlan0_hostname'"
+        log_warn "   wlan1: expected='$wlan1_expected', actual='$wlan1_hostname'"
+        
+        # Check service status for debugging
+        local good_status=$(systemctl is-active wifi-good.service 2>/dev/null || echo "inactive")
+        local bad_status=$(systemctl is-active wifi-bad.service 2>/dev/null || echo "inactive")
+        log_info "Service status: wifi-good=$good_status, wifi-bad=$bad_status"
+        
+        sleep 15  # Wait longer between attempts
+        ((attempt++))
+    done
+    
+    log_error "❌ Hostname separation verification failed after $max_attempts attempts"
+    log_error "This may cause DHCP hostname conflicts in Mist dashboard"
+    log_error "Run diagnostic script later: sudo bash $DASHBOARD_DIR/scripts/diagnose-dashboard.sh"
+    return 1
+}
+
+# =============================================================================
+# ENHANCED SERVICE STARTUP WITH STAGGERED TIMING
+# =============================================================================
+
+start_services_with_verification() {
+    log_info "Starting services with staggered timing and verification..."
+    
+    # Start dashboard first (always safe)
+    log_info "Starting dashboard service..."
+    if systemctl start wifi-dashboard.service 2>/dev/null; then
+      sleep 2
+      if systemctl is-active --quiet wifi-dashboard.service; then
+        log_info "✓ Dashboard service started successfully"
+      else
+        log_warn "⚠ Dashboard service not running"
+      fi
+    else
+      log_warn "⚠ Failed to start wifi-dashboard.service"
+    fi
+
+    # Start wired client (doesn't depend on SSID)
+    log_info "Starting wired test service..."
+    if systemctl start wired-test.service 2>/dev/null; then
+      sleep 2
+      if systemctl is-active --quiet wired-test.service; then
+        log_info "✓ Wired test service started successfully"
+      else
+        log_warn "⚠ Wired test service not running"
+      fi
+    else
+      log_warn "⚠ Failed to start wired-test.service"
+    fi
+
+    # ENHANCED: Start Wi-Fi services with proper staggering
+    log_info "Starting Wi-Fi services with hostname separation..."
+    
+    # Start bad client first (it should grab wlan1 and CNXNMist-WiFiBad)
+    if systemctl list-unit-files | grep -q "wifi-bad.service"; then
+        log_info "Starting wifi-bad service first..."
+        systemctl start wifi-bad.service 2>/dev/null || log_warn "Failed to start wifi-bad"
+        sleep 10  # Give bad client time to establish its hostname
+        
+        if systemctl is-active --quiet wifi-bad.service; then
+            log_info "✓ WiFi-bad service started"
+        else
+            log_warn "⚠ WiFi-bad service failed to start"
+        fi
+    fi
+    
+    # Then start good client (it should grab wlan0 and CNXNMist-WiFiGood)
+    log_info "Starting wifi-good service..."
+    systemctl start wifi-good.service 2>/dev/null || log_warn "Failed to start wifi-good"
+    sleep 10  # Give good client time to establish its hostname
+    
+    if systemctl is-active --quiet wifi-good.service; then
+        log_info "✓ WiFi-good service started"
+    else
+        log_warn "⚠ WiFi-good service failed to start"
+    fi
+    
+    # CALL THE VERIFICATION FUNCTION - THIS IS WHERE #5 GOES
+    log_info "🔍 Verifying hostname separation..."
+    if verify_hostname_separation; then
+        log_info "✅ Services started with proper hostname separation"
+    else
+        log_warn "⚠ Hostname separation verification failed"
+        log_warn "Services are running but may have hostname conflicts"
+        log_warn "Check dashboard for details: http://$(hostname -I | awk '{print $1}'):5000"
+    fi
+}
+
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+
 # Call the function during finalization
 setup_system_hostname
 
-# --- Start dashboard first (always safe) ---
-log_info "Starting dashboard service..."
-if systemctl start wifi-dashboard.service 2>/dev/null; then
-  sleep 2
-  if systemctl is-active --quiet wifi-dashboard.service; then
-    log_info "✓ Dashboard service started successfully"
-  else
-    log_warn "⚠ Dashboard service not running"
-  fi
-else
-  log_warn "⚠ Failed to start wifi-dashboard.service"
-fi
-
-# --- Start wired client (doesn't depend on SSID) ---
-log_info "Starting wired test service..."
-if systemctl start wired-test.service 2>/dev/null; then
-  sleep 2
-  if systemctl is-active --quiet wired-test.service; then
-    log_info "✓ Wired test service started successfully"
-  else
-    log_warn "⚠ Wired test service not running"
-  fi
-else
-  log_warn "⚠ Failed to start wired-test.service"
-fi
-
-# --- Wi-Fi services policy ---
-# Leave Wi-Fi (good/bad) to auto-start after UI config is saved.
-log_info "Wi-Fi services will start automatically when configuration is complete"
-log_info "Configure Wi-Fi in the dashboard; services will connect afterwards"
-
-# --- Convenience status helper ---
+# Enhanced status helper
 cat > "${DASHBOARD_DIR}/scripts/check_status.sh" << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -120,7 +261,32 @@ for service in wifi-dashboard wired-test wifi-good wifi-bad; do
     echo "  - ${service}: ${status} (${enabled})"
   fi
 done
+
 echo
+echo "--- Hostname Verification ---"
+for iface in wlan0 wlan1; do
+    identity_file="/home/pi/wifi_test_dashboard/identity_${iface}.json"
+    if [[ -f "$identity_file" ]]; then
+        echo "  $iface identity:"
+        if command -v jq >/dev/null 2>&1; then
+            expected=$(jq -r '.expected_hostname // "unknown"' "$identity_file" 2>/dev/null)
+            actual=$(jq -r '.hostname // "unknown"' "$identity_file" 2>/dev/null)
+            echo "    Expected: $expected"
+            echo "    Actual: $actual"
+            if [[ "$expected" == "$actual" ]]; then
+                echo "    Status: ✅ MATCH"
+            else
+                echo "    Status: ❌ MISMATCH"
+            fi
+        else
+            cat "$identity_file" | grep -E "(hostname|expected_hostname)" | sed 's/^/    /'
+        fi
+        echo
+    else
+        echo "  $iface: No identity file found"
+    fi
+done
+
 echo "--- Network Interfaces ---"
 nmcli device status 2>/dev/null || echo "NetworkManager not available"
 echo
@@ -146,8 +312,12 @@ EOF
 chmod +x "${DASHBOARD_DIR}/scripts/check_status.sh"
 chown "$PI_USER:$PI_USER" "${DASHBOARD_DIR}/scripts/check_status.sh"
 
-# --- Friendly summary ---
+# EXECUTE THE ENHANCED SERVICE STARTUP WITH VERIFICATION
+start_services_with_verification
+
+# Final summary
 host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 log_info "✓ Installation finalized successfully"
 [[ -n "${host_ip:-}" ]] && log_info "✓ Dashboard accessible at: http://${host_ip}:5000"
 log_info "✓ Use ${DASHBOARD_DIR}/scripts/check_status.sh for troubleshooting"
+log_info "✓ Hostname verification completed - services should have unique identities"

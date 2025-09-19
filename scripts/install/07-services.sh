@@ -107,6 +107,8 @@ cat > /etc/systemd/system/wifi-good.service <<EOF
 Description=Wi-Fi Good Client with Integrated Traffic on ${GOOD_IFACE}
 After=network-online.target NetworkManager.service
 Wants=network-online.target
+After=network-online.target NetworkManager.service wifi-bad.service
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -136,6 +138,8 @@ if [[ -n "${BAD_IFACE:-}" && "${BAD_IFACE}" != "disabled" && "${BAD_IFACE}" != "
 Description=Wi-Fi Bad Client (auth failures) on ${BAD_IFACE}
 After=network-online.target NetworkManager.service
 Wants=network-online.target
+Before=wifi-good.service
+After=network-online.target NetworkManager.service
 
 [Service]
 Type=simple
