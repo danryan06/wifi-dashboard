@@ -4,6 +4,7 @@ import subprocess
 import logging
 import time
 import re
+import json
 from datetime import datetime
 
 app = Flask(__name__)
@@ -23,7 +24,7 @@ def _no_cache(resp):
     resp.headers["Expires"] = "0"
     return resp
 
-# Throughput monitoring
+# Throughput monitoring with persistent storage
 last_stats = {}
 last_stats_time = 0
 
@@ -173,6 +174,23 @@ def get_network_stats():
     
     return stats
 
+def read_persistent_stats(interface):
+    """Read persistent stats from client-generated JSON files"""
+    stats_file = os.path.join(BASE_DIR, f"stats_{interface}.json")
+    try:
+        if os.path.exists(stats_file):
+            with open(stats_file, 'r') as f:
+                data = json.load(f)
+                return {
+                    'download': data.get('download', 0),
+                    'upload': data.get('upload', 0),
+                    'timestamp': data.get('timestamp', time.time())
+                }
+        return {'download': 0, 'upload': 0, 'timestamp': time.time()}
+    except Exception as e:
+        logger.error(f"Error reading persistent stats for {interface}: {e}")
+        return {'download': 0, 'upload': 0, 'timestamp': time.time()}
+
 def calculate_throughput():
     """Calculate throughput based on /proc/net/dev deltas and integrated service status."""
     global last_stats, last_stats_time
@@ -220,12 +238,18 @@ def calculate_throughput():
                 except Exception:
                     is_active = False
 
+                # Read persistent stats for total counters
+                persistent_stats = read_persistent_stats(iface)
+
                 throughput[iface] = {
                     'download': rx_rate,
                     'upload': tx_rate,
                     'active': is_active,
                     'rx_packets': current['rx_packets'] - previous['rx_packets'],
-                    'tx_packets': current['tx_packets'] - previous['tx_packets']
+                    'tx_packets': current['tx_packets'] - previous['tx_packets'],
+                    'total_download': persistent_stats['download'],
+                    'total_upload': persistent_stats['upload'],
+                    'stats_timestamp': persistent_stats['timestamp']
                 }
 
     # Update last stats snapshot
@@ -233,7 +257,6 @@ def calculate_throughput():
     last_stats_time = current_time
 
     return throughput
-
 
 def get_system_info():
     """Get system information"""
@@ -255,9 +278,14 @@ def get_system_info():
                 interfaces[iface].append(addr)
         
         # Get netem status
-        netem_result = subprocess.run(['tc', 'qdisc', 'show', 'dev', 'wlan0'], 
-                                    capture_output=True, text=True, timeout=5)
-        netem_status = netem_result.stdout.strip() if netem_result.returncode == 0 else "No netem configured"
+        try:
+            assignments = get_interface_assignments()
+            good_iface = assignments.get('good_interface', 'wlan0')
+            netem_result = subprocess.run(['tc', 'qdisc', 'show', 'dev', good_iface], 
+                                        capture_output=True, text=True, timeout=5)
+            netem_status = netem_result.stdout.strip() if netem_result.returncode == 0 else "No netem configured"
+        except Exception:
+            netem_status = "Error checking netem status"
         
         # Get NetworkManager connection status
         nm_result = subprocess.run(['nmcli', 'connection', 'show', '--active'], 
@@ -336,7 +364,6 @@ def get_interface_assignments():
         logger.error(f"Error reading interface assignments: {e}")
 
     return assignments
-
 
 def get_interface_capabilities():
     """Get detailed interface capabilities and status"""
@@ -443,7 +470,6 @@ def build_log_labels(assignments: dict) -> dict:
         "wired":       "Wired Client + Heavy Traffic (eth0)",
         "wifi-good":   f"Wi-Fi Good Client + Traffic ({good_iface})",
         "wifi-bad":    f"Wi-Fi Bad Client - Auth Failures ({bad_iface})",
-        # REMOVED: traffic-eth0, traffic-wlan0, traffic-wlan1 entries
     }
 
 @app.route("/status")
@@ -462,7 +488,6 @@ def status():
             'wired':      read_log_file('wired.log', 50),
             'wifi-good':  read_log_file('wifi-good.log', 50),
             'wifi-bad':   read_log_file('wifi-bad.log', 50),
-            # REMOVED: traffic-eth0, traffic-wlan0, traffic-wlan1 - now integrated
         }  
         
         # Get log file information for integrated services only
@@ -486,8 +511,6 @@ def status():
     except Exception as e:
         logger.error(f"Error in status endpoint: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
-
-
 
 @app.route("/api/logs/<log_name>")
 def api_logs(log_name):
@@ -533,15 +556,37 @@ def api_logs(log_name):
         logger.error(f"Error in logs API endpoint: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-
 @app.route("/api/throughput")
 def api_throughput():
-    """API endpoint for real-time throughput data"""
+    """API endpoint for real-time throughput data with persistent totals"""
     try:
         throughput_data = calculate_throughput()
+        
+        # Format throughput data with better units and persistent totals
+        formatted_data = {}
+        for iface, data in throughput_data.items():
+            # Convert rates to Mbps
+            download_mbps = (data['download'] * 8) / (1024 * 1024)
+            upload_mbps = (data['upload'] * 8) / (1024 * 1024)
+            
+            # Format total bytes in human readable format
+            total_down_mb = data['total_download'] / (1024 * 1024)
+            total_up_mb = data['total_upload'] / (1024 * 1024)
+            
+            formatted_data[iface] = {
+                'download': download_mbps,
+                'upload': upload_mbps,
+                'active': data['active'],
+                'total_download': total_down_mb,
+                'total_upload': total_up_mb,
+                'rx_packets': data.get('rx_packets', 0),
+                'tx_packets': data.get('tx_packets', 0),
+                'stats_age': time.time() - data.get('stats_timestamp', time.time())
+            }
+        
         return jsonify({
             "success": True,
-            "throughput": throughput_data,
+            "throughput": formatted_data,
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:
@@ -660,13 +705,19 @@ def traffic_status():
                 info = get_log_file_info(log_file)
                 exists = bool(info.get('exists'))
 
+                # Get persistent traffic stats
+                persistent_stats = read_persistent_stats(interface)
+
                 traffic_status_data[interface] = {
                     'service_name': service_name,
                     'service_status': status,
                     'description': description,
                     'ip_address': ip_info,
                     'recent_logs': recent,
-                    'log_file_exists': exists
+                    'log_file_exists': exists,
+                    'total_download_mb': round(persistent_stats['download'] / (1024 * 1024), 1),
+                    'total_upload_mb': round(persistent_stats['upload'] / (1024 * 1024), 1),
+                    'stats_timestamp': persistent_stats['timestamp']
                 }
 
             except Exception as e:
@@ -676,7 +727,10 @@ def traffic_status():
                     'description': description,
                     'ip_address': 'unknown',
                     'recent_logs': [],
-                    'log_file_exists': False
+                    'log_file_exists': False,
+                    'total_download_mb': 0,
+                    'total_upload_mb': 0,
+                    'stats_timestamp': 0
                 }
 
         return jsonify({"interfaces": traffic_status_data, "success": True})
@@ -765,7 +819,6 @@ def update_wifi():
 
     return redirect("/")
 
-
 @app.route("/set_netem", methods=["POST"])
 def set_netem():
     """Configure network emulation on the GOOD client interface"""
@@ -798,7 +851,6 @@ def set_netem():
         flash(f"Error configuring network emulation: {e}", "error")
 
     return redirect("/")
-
 
 @app.route("/service_action", methods=["POST"])
 def service_action():
@@ -853,5 +905,5 @@ def shutdown():
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
-    log_action("Wi-Fi Test Dashboard v5.0 starting")
+    log_action("Wi-Fi Test Dashboard v5.0 starting with persistent throughput tracking")
     app.run(host="0.0.0.0", port=5000, debug=False)
