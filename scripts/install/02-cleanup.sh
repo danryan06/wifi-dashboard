@@ -7,8 +7,8 @@ set -euo pipefail
 : "${PI_HOME:=/home/${PI_USER}}"
 
 # Logging helpers
-log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
-log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
+log_info()  { echo -e "\033[0;32m[INFO]\033[0m $1"; }
+log_warn()  { echo -e "\033[1;33m[WARN]\033[0m $1"; }
 log_error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; }
 
 log_info "Starting simplified cleanup for fresh installations..."
@@ -45,16 +45,19 @@ cleanup_services() {
 cleanup_configs() {
     log_info "Cleaning up NetworkManager connections..."
     if command -v nmcli >/dev/null 2>&1; then
-        nmcli connection show | grep -E "(CNXNMist|wifi-test|dashboard)" | awk '{print $1}' | \
-        while read -r conn; do
-            [[ -n "$conn" ]] && nmcli connection delete "$conn" 2>/dev/null || true
+        # Prevent grep from aborting when there are no matches
+        nmcli connection show | grep -E "(CNXNMist|wifi-test|dashboard)" || true | \
+        awk '{print $1}' | while read -r conn; do
+            if [[ -n "$conn" ]]; then
+                nmcli connection delete "$conn" 2>/dev/null || true
+            fi
         done
     fi
 
     log_info "Removing old hostname/DHCP configs..."
-    rm -f /etc/dhcp/dhclient-wlan*.conf
-    rm -f /etc/NetworkManager/conf.d/dhcp-hostname-*.conf
-    rm -rf /var/run/wifi-dashboard
+    rm -f /etc/dhcp/dhclient-wlan*.conf       || true
+    rm -f /etc/NetworkManager/conf.d/dhcp-hostname-*.conf || true
+    rm -rf /var/run/wifi-dashboard            || true
 }
 
 # -----------------------------------------------------------------------------
@@ -76,4 +79,3 @@ cleanup_configs
 backup_old_install
 
 log_info "✅ Cleanup complete. System ready for fresh installation."
-exit 0
