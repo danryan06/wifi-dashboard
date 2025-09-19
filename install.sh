@@ -88,10 +88,31 @@ ensure_fresh_install_state() {
     
     # Remove any conflicting NetworkManager connections
     if command -v nmcli >/dev/null 2>&1; then
-        nmcli connection show | grep -E "(CNXNMist|wifi-test|dashboard)" | awk '{print $1}' | \
-        while read -r conn; do
-            [[ -n "$conn" ]] && nmcli connection delete "$conn" 2>/dev/null || true
-        done
+        log_info "Cleaning NetworkManager connections..."
+        
+        # More robust connection cleanup
+        local connections_output
+        if connections_output=$(nmcli connection show 2>/dev/null); then
+            local conflicting_connections
+            if conflicting_connections=$(echo "$connections_output" | grep -E "(CNXNMist|wifi-test|dashboard)" | awk '{print $1}' 2>/dev/null); then
+                if [[ -n "$conflicting_connections" ]]; then
+                    echo "$conflicting_connections" | while IFS= read -r conn; do
+                        if [[ -n "$conn" && "$conn" != "NAME" ]]; then
+                            log_info "Removing connection: $conn"
+                            nmcli connection delete "$conn" 2>/dev/null || log_warn "Failed to remove connection: $conn"
+                        fi
+                    done
+                else
+                    log_info "No conflicting connections found"
+                fi
+            else
+                log_info "No conflicting connections found"
+            fi
+        else
+            log_warn "Could not query NetworkManager connections"
+        fi
+    else
+        log_warn "NetworkManager not available"
     fi
     
     # Stop any existing services
