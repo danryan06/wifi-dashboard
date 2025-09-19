@@ -807,6 +807,14 @@ def update_wifi():
                 subprocess.run(['sudo', 'systemctl', 'restart', '--no-block', 'wifi-good.service'])
                 subprocess.run(['sudo', 'systemctl', 'restart', '--no-block', 'wifi-bad.service'])
                 flash("Wi-Fi services restarting in the background…", "info")
+
+                # Run hostname verification script
+                subprocess.Popen(
+                    ["/home/pi/wifi_test_dashboard/scripts/verify-hostnames.sh"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+
             except Exception as e:
                 logger.error(f"Error restarting services: {e}")
                 flash("Configuration saved but failed to restart services", "warning")
