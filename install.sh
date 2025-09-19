@@ -11,7 +11,7 @@ trap 'echo -e "\033[0;31m[ERROR]\033[0m ❌ Installation failed at line $LINENO.
 # ───────────────────────────────────────────────────────────────────────────────
 # Config
 # ───────────────────────────────────────────────────────────────────────────────
-REPO_URL="${REPO_URL:-https://raw.githubusercontent.com/danryan06/wifi-dashboard/main}"
+REPO_URL="${REPO_URL:-https://raw.githubusercontent.com/danryan06/wifi-dashboard/main/scripts/install}"
 PI_USER="${PI_USER:-$(getent passwd 1000 | cut -d: -f1 2>/dev/null || echo 'pi')}"
 PI_HOME="/home/$PI_USER"
 VERSION="${VERSION:-v5.1.0}"
