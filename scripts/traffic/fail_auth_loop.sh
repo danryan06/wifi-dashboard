@@ -574,7 +574,7 @@ attempt_multiple_failures() {
     log_msg "✅ Multiple authentication failure cycle completed"
 }
 
-eenhanced_bad_client_main_loop() {
+enhanced_bad_client_main_loop() {
     log_msg "🚀 Starting Wi-Fi bad client with ENHANCED identity management"
     log_msg "Interface: $INTERFACE, Hostname: $HOSTNAME"
     log_msg "Purpose: Generate visible authentication failures in Mist dashboard"

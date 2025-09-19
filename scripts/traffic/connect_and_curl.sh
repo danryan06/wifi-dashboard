@@ -18,10 +18,6 @@ INTERFACE="${INTERFACE:-wlan0}"
 HOSTNAME="${WIFI_GOOD_HOSTNAME:-${HOSTNAME:-CNXNMist-WiFiGood}}"
 LOG_MAX_SIZE_BYTES="${LOG_MAX_SIZE_BYTES:-10485760}"   # 10MB default
 
-# Ensure system hostname is set correctly
-if command -v hostnamectl >/dev/null 2>&1; then
-  sudo hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || true
-fi
 
 # Trap errors but DO NOT exit service
 trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec line=$LINENO" | tee -a "$LOG_FILE"' ERR
@@ -64,57 +60,82 @@ set_device_hostname() {
     local desired_hostname="$1"
     local interface="$2"
     
-    log_msg "🏷️ Setting device hostname to: $desired_hostname for interface $interface"
+    log_msg "🏷️ Setting DHCP hostname to: $desired_hostname for interface $interface (NOT changing system hostname)"
     
     # Get the MAC address for this interface for logging
     local mac_addr=$(ip link show "$interface" 2>/dev/null | awk '/link\/ether/ {print $2}' || echo "unknown")
     log_msg "📱 Interface $interface MAC address: $mac_addr"
     
-    # Method 1: Set system hostname
+    # REMOVED: Don't set system hostname - causes conflicts between services
+    # Instead, only set DHCP hostname for this specific interface
+    
+    # Method 1: Set NetworkManager DHCP hostname for this interface
+    log_msg "🌐 Setting DHCP hostname for interface $interface connections"
+    
+    # Configure all existing connections on this interface
+    local existing_connections
+    existing_connections=$($SUDO nmcli -t -f NAME,DEVICE connection show --active | grep ":$interface$" | cut -d: -f1)
+    
+    if [[ -n "$existing_connections" ]]; then
+        while read -r connection_name; do
+            if [[ -n "$connection_name" ]]; then
+                log_msg "🔧 Updating connection '$connection_name' DHCP hostname to '$desired_hostname'"
+                $SUDO nmcli connection modify "$connection_name" \
+                    connection.dhcp-hostname "$desired_hostname" \
+                    ipv4.dhcp-hostname "$desired_hostname" \
+                    ipv4.dhcp-send-hostname yes \
+                    ipv6.dhcp-hostname "$desired_hostname" \
+                    ipv6.dhcp-send-hostname yes 2>/dev/null && \
+                    log_msg "✅ Updated connection '$connection_name'" || \
+                    log_msg "⚠️ Failed to update connection '$connection_name'"
+            fi
+        done <<< "$existing_connections"
+    fi
+    
+    # Method 2: Create interface-specific dhclient config
+    configure_dhcp_hostname "$desired_hostname" "$interface"
+    
+    log_msg "✅ Interface $interface configured to send DHCP hostname: $desired_hostname"
+    return 0
+}
+
+# ADD this function after set_device_hostname() (around line 120):
+setup_system_hostname() {
+    local system_hostname="${1:-CNXNMist-Dashboard}"
+    
+    log_msg "🏠 Setting up system hostname (one-time): $system_hostname"
+    
+    # Method 1: Set system hostname via hostnamectl
     if command -v hostnamectl >/dev/null 2>&1; then
-        if $SUDO hostnamectl set-hostname "$desired_hostname" 2>/dev/null; then
-            log_msg "✅ System hostname set via hostnamectl: $desired_hostname"
+        if $SUDO hostnamectl set-hostname "$system_hostname" 2>/dev/null; then
+            log_msg "✅ System hostname set via hostnamectl: $system_hostname"
         else
             log_msg "❌ Failed to set hostname via hostnamectl"
         fi
     fi
     
     # Method 2: Update /etc/hostname
-    if echo "$desired_hostname" | $SUDO tee /etc/hostname >/dev/null 2>&1; then
-        log_msg "✅ Updated /etc/hostname: $desired_hostname"
+    if echo "$system_hostname" | $SUDO tee /etc/hostname >/dev/null 2>&1; then
+        log_msg "✅ Updated /etc/hostname: $system_hostname"
     else
         log_msg "❌ Failed to update /etc/hostname"
     fi
     
-    # Method 3: Update /etc/hosts
-    $SUDO sed -i.bak "/127.0.1.1/d" /etc/hosts 2>/dev/null || true
-    echo "127.0.1.1    $desired_hostname" | $SUDO tee -a /etc/hosts >/dev/null
-    log_msg "✅ Updated /etc/hosts with: $desired_hostname"
+    # Method 3: Fix /etc/hosts properly
+    $SUDO cp /etc/hosts /etc/hosts.backup.$(date +%s) 2>/dev/null || true
     
-    # Method 4: Set NetworkManager hostname for this connection
-    local current_connection
-    current_connection=$($SUDO nmcli -t -f NAME connection show --active 2>/dev/null | head -1 || echo "")
+    # Remove old 127.0.1.1 entries and add new one
+    $SUDO sed -i '/^127\.0\.1\.1/d' /etc/hosts 2>/dev/null || true
+    echo "127.0.1.1    $system_hostname" | $SUDO tee -a /etc/hosts >/dev/null
     
-    if [[ -n "$current_connection" ]]; then
-        if $SUDO nmcli connection modify "$current_connection" connection.dhcp-hostname "$desired_hostname" 2>/dev/null; then
-            log_msg "✅ Set DHCP hostname in NetworkManager connection: $desired_hostname"
-        else
-            log_msg "⚠️ Could not set DHCP hostname in NetworkManager"
-        fi
-    fi
+    log_msg "✅ Updated /etc/hosts with system hostname: $system_hostname"
     
-    # Method 5: Force immediate hostname update
-    if command -v hostname >/dev/null 2>&1; then
-        $SUDO hostname "$desired_hostname" 2>/dev/null || true
-        log_msg "✅ Set immediate hostname: $(hostname)"
-    fi
-    
-    # Verify hostname was set
+    # Verify
     local actual_hostname=$(hostname)
-    if [[ "$actual_hostname" == "$desired_hostname" ]]; then
-        log_msg "✅ Hostname verification successful: $actual_hostname"
+    if [[ "$actual_hostname" == "$system_hostname" ]]; then
+        log_msg "✅ System hostname verification successful: $actual_hostname"
     else
-        log_msg "⚠️ Hostname verification: expected '$desired_hostname', got '$actual_hostname'"
+        log_msg "⚠️ System hostname verification: expected '$system_hostname', got '$actual_hostname'"
     fi
     
     return 0
@@ -969,14 +990,21 @@ main_loop() {
 enhanced_good_client_setup() {
     log_msg "🚀 Starting enhanced good client with PROPER identity management"
     
-    # Set our identity immediately and persistently
+    # FIXED: Set up system hostname ONLY if not already set
+    local current_system_hostname=$(hostname)
+    if [[ "$current_system_hostname" == "localhost" ]] || [[ "$current_system_hostname" == "raspberrypi" ]] || [[ -z "$current_system_hostname" ]]; then
+        setup_system_hostname "CNXNMist-Dashboard"
+    else
+        log_msg "🏠 System hostname already set: $current_system_hostname (not changing)"
+    fi
+    
+    # Set DHCP hostname for THIS interface only
     set_device_hostname "$HOSTNAME" "$INTERFACE"
-    configure_dhcp_hostname "$HOSTNAME" "$INTERFACE"
     
     # Verify our identity
     verify_device_identity "$INTERFACE" "$HOSTNAME"
     
-    log_msg "Interface: $INTERFACE | Hostname: $HOSTNAME"
+    log_msg "Interface: $INTERFACE | DHCP Hostname: $HOSTNAME | System Hostname: $(hostname)"
     log_msg "Roaming: ${ROAMING_ENABLED} (interval ${ROAMING_INTERVAL}s; scan ${ROAMING_SCAN_INTERVAL}s; min ${MIN_SIGNAL_THRESHOLD}dBm)"
     log_msg "Persistent stats file: $STATS_FILE"
 }
