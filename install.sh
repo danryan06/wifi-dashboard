@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Enhanced Wi-Fi Test Dashboard Installer
-# - Orders steps correctly
-# - Plays nice on fresh Pis
-# - Soft validation so first-boot doesn’t look like a failure
+# - Orders steps correctly for fresh Pi installations
+# - Handles hostname conflicts properly
+# - Robust error handling and validation
 # - Clear next steps at the end
 
 set -Eeuo pipefail
@@ -55,6 +55,9 @@ download_to() {
     return 1
   fi
 
+  # Ensure target directory exists
+  mkdir -p "$(dirname "$target")"
+
   while (( attempt < 3 )); do
     attempt=$(( attempt + 1 ))
     if curl -fsSL "${REPO_URL:-}/$file" -o "$target"; then
@@ -78,15 +81,22 @@ run_install_script() {
     exit 1
   fi
 
-  local path="${WORK_DIR}/${script}"
+  # Use basename for local filename to avoid subdirectory issues
+  local basename_script="$(basename "$script")"
+  local path="${WORK_DIR}/${basename_script}"
+  
   log_step "$desc"
-  log_info "Downloading ${script} (attempt 1/3)..."
+  log_info "Downloading ${script}..."
 
   if ! download_to "$script" "$path"; then
     log_error "❌ Failed to download ${script}"
     exit 1
   fi
 
+  # Make script executable
+  chmod +x "$path"
+
+  # Set environment variables for the script
   export PI_USER PI_HOME REPO_URL VERSION
 
   if bash "$path"; then
@@ -108,9 +118,14 @@ check_prerequisites() {
     exit 1
   fi
 
+  # Check if this is a Raspberry Pi (warn if not)
+  if ! grep -q "Raspberry Pi" /proc/cpuinfo 2>/dev/null; then
+    log_warn "Not running on Raspberry Pi - some features may not work optimally"
+  fi
+
   # Network is required to fetch scripts
   if ! curl -fsSL --max-time 10 https://google.com >/dev/null; then
-    log_error "Internet connection is required"
+    log_error "Internet connection is required for installation"
     exit 1
   fi
 
@@ -128,64 +143,76 @@ check_prerequisites() {
 ensure_fresh_install_state() {
   log_step "Ensuring clean state for fresh installation..."
 
-  # Back up existing tree if present
+  # Back up existing installation if present
   if [[ -d "$PI_HOME/wifi_test_dashboard" ]]; then
     log_warn "Existing installation detected, backing up..."
     mv "$PI_HOME/wifi_test_dashboard" "$PI_HOME/wifi_test_dashboard.backup.$(date +%s)"
   fi
 
-  # Remove old DHCP hostname bits (created later by services when SSID exists)
+  # Remove old DHCP hostname configs (will be recreated by services)
   log_info "Cleaning previous hostname configurations..."
   rm -f /etc/dhcp/dhclient-wlan*.conf
   rm -f /etc/NetworkManager/conf.d/dhcp-hostname-*.conf
   rm -rf /var/run/wifi-dashboard
 
-  # Disconnect Wi-Fi (avoids NM fighting while we reconfigure)
+  # Disconnect Wi-Fi interfaces to avoid conflicts during installation
   if command -v nmcli >/dev/null 2>&1; then
     nmcli dev disconnect wlan0 2>/dev/null || true
     nmcli dev disconnect wlan1 2>/dev/null || true
     log_info "Disconnected Wi-Fi interfaces"
-  else
-    log_info "NetworkManager connection cleanup will be handled by cleanup script..."
   fi
 
-  # Remove stale service units
-  systemctl stop wifi-dashboard.service wifi-good.service wifi-bad.service wired-test.service 2>/dev/null || true
-  systemctl disable wifi-dashboard.service wifi-good.service wifi-bad.service wired-test.service 2>/dev/null || true
-  rm -f /etc/systemd/system/wifi-*.service /etc/systemd/system/wired-test.service
+  # Remove any existing service units
+  local services=(wifi-dashboard wifi-good wifi-bad wired-test traffic-eth0 traffic-wlan0 traffic-wlan1)
+  for service in "${services[@]}"; do
+    systemctl stop "${service}.service" 2>/dev/null || true
+    systemctl disable "${service}.service" 2>/dev/null || true
+  done
+
+  # Clean service files
+  rm -f /etc/systemd/system/wifi-*.service
+  rm -f /etc/systemd/system/wired-test.service  
+  rm -f /etc/systemd/system/traffic-*.service
   systemctl daemon-reload
 
   log_info "✅ Fresh install state ensured"
 }
 
 # ───────────────────────────────────────────────────────────────────────────────
-# Main sequence
+# Main sequence - CRITICAL: Proper ordering for fresh Pi installs
 # ───────────────────────────────────────────────────────────────────────────────
 main_installation_sequence() {
   log_step "Starting enhanced installation sequence..."
 
-  # Include full paths to match your repository structure
+  # Phase 1: System Preparation (CRITICAL FIRST)
   run_install_script "scripts/install/01-dependencies-enhanced.sh" "Installing system dependencies with NetworkManager fixes"
+  sleep 3  # Let NetworkManager stabilize
+
+  run_install_script "scripts/install/02-cleanup.sh" "Cleaning up previous installations thoroughly"
   sleep 2
 
-  run_install_script "scripts/install/02-cleanup.sh"              "Cleaning up previous installations"
-  sleep 1
+  # Phase 2: Structure Setup
+  run_install_script "scripts/install/03-directories.sh" "Creating directory structure and baseline configuration"
 
-  run_install_script "scripts/install/03-directories.sh"          "Creating directory structure and baseline configuration"
+  # Phase 3: Interface Detection (CRITICAL - Must happen before service creation)
+  run_install_script "scripts/install/04.5-auto-interface-assignment.sh" "Auto-detecting and assigning network interfaces optimally"
+  sleep 3  # Allow interface detection to complete
 
-  run_install_script "scripts/install/04.5-auto-interface-assignment.sh" "Auto-detecting and assigning network interfaces"
-  sleep 2
+  # Phase 4: Application Components
+  run_install_script "scripts/install/04-flask-app.sh" "Installing Flask web application"
+  run_install_script "scripts/install/05-templates.sh" "Installing web interface templates"
+  run_install_script "scripts/install/06-traffic-scripts.sh" "Installing traffic generation scripts"
 
-  run_install_script "scripts/install/04-flask-app.sh"            "Installing Flask application"
-  run_install_script "scripts/install/05-templates.sh"            "Installing web interface templates"
-  run_install_script "scripts/install/06-traffic-scripts.sh"      "Installing traffic generation scripts"
-  run_install_script "scripts/install/07-services.sh"             "Creating and configuring systemd services"
-  sleep 2
-  run_install_script "scripts/install/08-finalize.sh"             "Finalizing installation with hostname verification"
+  # Phase 5: Service Creation (AFTER interface detection)
+  run_install_script "scripts/install/07-services.sh" "Creating and configuring systemd services with proper dependencies"
+  sleep 3  # Let systemd register services
+
+  # Phase 6: Final Setup with Enhanced Verification
+  run_install_script "scripts/install/08-finalize.sh" "Finalizing installation with hostname verification and service startup"
 }
 
 # ───────────────────────────────────────────────────────────────────────────────
-# Validation (soft – no scary red X on fresh installs)
+# Validation (soft validation for fresh installs)
 # ───────────────────────────────────────────────────────────────────────────────
 validate_installation() {
   log_step "Validating installation..."
@@ -214,6 +241,7 @@ validate_installation() {
     "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh"
     "$PI_HOME/wifi_test_dashboard/scripts/wired_simulation.sh"
     "$PI_HOME/wifi_test_dashboard/configs/interface-assignments.conf"
+    "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
   )
   for f in "${need_files[@]}"; do
     if [[ ! -f "$f" ]]; then
@@ -222,7 +250,7 @@ validate_installation() {
     fi
   done
 
-  # Services present?
+  # Service units
   local svc=(wifi-dashboard wifi-good wifi-bad wired-test)
   for s in "${svc[@]}"; do
     if [[ ! -f "/etc/systemd/system/${s}.service" ]]; then
@@ -231,26 +259,42 @@ validate_installation() {
     fi
   done
 
-  # DHCP hostname confs are created by the clients AFTER SSID is set.
-  # On fresh installs these will be missing—treat as soft warnings only.
+  # Check if services are enabled
+  for s in "${svc[@]}"; do
+    if ! systemctl is-enabled "${s}.service" >/dev/null 2>&1; then
+      log_warn "Service ${s}.service is not enabled"
+      soft_issues=$((soft_issues+1))
+    fi
+  done
+
+  # DHCP hostname configs are created by services AFTER SSID is configured
+  # This is normal on fresh installs
   if [[ ! -f "/etc/dhcp/dhclient-wlan0.conf" ]]; then
-    log_warn "wlan0 DHCP hostname config not present yet (expected on fresh install)"
+    log_warn "wlan0 DHCP hostname config not present yet (normal on fresh install)"
     soft_issues=$((soft_issues+1))
   fi
   if [[ ! -f "/etc/dhcp/dhclient-wlan1.conf" ]]; then
-    log_warn "wlan1 DHCP hostname config not present yet (expected on fresh install)"
+    log_warn "wlan1 DHCP hostname config not present yet (normal on fresh install)"
     soft_issues=$((soft_issues+1))
   fi
 
+  # Check NetworkManager status
+  if ! systemctl is-active --quiet NetworkManager; then
+    log_error "NetworkManager is not running"
+    hard_issues=$((hard_issues+1))
+  fi
+
+  # Results
   if (( hard_issues > 0 )); then
-    log_error "❌ Validation found $hard_issues hard issue(s). Please check $INSTALL_LOG."
+    log_error "❌ Validation found $hard_issues critical issue(s)"
+    log_error "Installation may not function properly. Check $INSTALL_LOG for details."
     return 1
   fi
 
   if (( soft_issues > 0 )); then
-    log_warn "⚠️ Validation found $soft_issues soft issue(s)."
-    log_warn "   These are normal until you enter SSID/password in the dashboard."
-    log_warn "   Once Wi-Fi services start, hostname/DHCP files will be created automatically."
+    log_warn "⚠️ Validation found $soft_issues minor issue(s)"
+    log_warn "These are normal on fresh installs until Wi-Fi is configured"
+    log_warn "Services will create hostname configs automatically after SSID setup"
   else
     log_info "✅ Installation validation passed with no issues"
   fi
@@ -259,7 +303,7 @@ validate_installation() {
 
 show_final_status() {
   local ip
-  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo "")"
 
   echo
   echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════╗${NC}"
@@ -267,36 +311,73 @@ show_final_status() {
   echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════╝${NC}"
   echo
 
-  [[ -n "$ip" ]] && log_info "Dashboard: http://${ip}:5000" || log_info "Open the dashboard at: http://<pi-ip>:5000"
+  if [[ -n "$ip" ]]; then
+    log_info "🌐 Dashboard URL: http://${ip}:5000"
+  else
+    log_info "🌐 Dashboard URL: http://<your-pi-ip>:5000"
+  fi
 
   echo
-  log_info "What’s installed:"
-  log_info "  • NetworkManager configuration tuned for Pi"
-  log_info "  • Auto-detected interface assignments"
-  log_info "  • Hostname lock & per-interface DHCP hostnames"
-  log_info "  • Dashboard + Wi-Fi good/bad + wired services"
-  log_info "  • Traffic generation & diagnostics scripts"
+  log_info "📋 What's been installed:"
+  log_info "  ✅ Enhanced NetworkManager configuration for fresh Pi"
+  log_info "  ✅ Automatic Wi-Fi interface detection and assignment"
+  log_info "  ✅ Hostname conflict prevention with lock system"
+  log_info "  ✅ Dual-interface Wi-Fi testing (good/bad client simulation)"
+  log_info "  ✅ Heavy traffic generation with intelligent roaming"
+  log_info "  ✅ Web-based configuration and real-time monitoring"
+  log_info "  ✅ Comprehensive logging and diagnostic tools"
   echo
-  log_info "Next steps:"
-  log_info "  1) Open the dashboard URL above"
-  log_info "  2) Enter SSID and password"
-  log_info "  3) Services auto-restart; verify in Status tab"
+  log_info "🚀 Next Steps:"
+  log_info "  1. Open the dashboard URL above in your browser"
+  log_info "  2. Navigate to the 'Wi-Fi Config' tab"
+  log_info "  3. Enter your Wi-Fi network SSID and password"
+  log_info "  4. Services will restart automatically with your settings"
+  log_info "  5. Monitor progress in the 'Status' and 'Logs' tabs"
   echo
-  log_info "Logs live at: $INSTALL_LOG"
+  log_info "🔧 Useful Commands:"
+  log_info "  • Check service status: sudo systemctl status wifi-good wifi-bad"
+  log_info "  • View live logs: sudo journalctl -u wifi-good -f"
+  log_info "  • Run diagnostics: sudo bash $PI_HOME/wifi_test_dashboard/scripts/diagnose-dashboard.sh"
+  log_info "  • Fix any issues: sudo bash $PI_HOME/wifi_test_dashboard/scripts/fix-services.sh"
+  echo
+  log_info "📊 What the system will do:"
+  log_info "  • Good Wi-Fi client: Connects successfully, generates realistic traffic, roams between APs"
+  log_info "  • Bad Wi-Fi client: Generates authentication failures for security testing"
+  log_info "  • Wired client: Heavy ethernet traffic simulation"
+  log_info "  • Each client uses unique DHCP hostnames (CNXNMist-WiFiGood, CNXNMist-WiFiBad, CNXNMist-Wired)"
+  echo
+  log_info "🎊 Your enhanced Wi-Fi testing system is ready for Mist dashboard monitoring!"
+  log_info "📄 Installation log: $INSTALL_LOG"
 }
 
 # ───────────────────────────────────────────────────────────────────────────────
-# Main
+# Main execution
 # ───────────────────────────────────────────────────────────────────────────────
-print_banner
-log_info "Starting Wi-Fi Dashboard installation..."
-log_info "Target user: $PI_USER"
-log_info "Installation directory: $PI_HOME/wifi_test_dashboard"
-log_info "Version: $VERSION"
-echo
+main() {
+  print_banner
+  
+  log_info "Starting Wi-Fi Dashboard installation..."
+  log_info "Target user: $PI_USER"
+  log_info "Installation directory: $PI_HOME/wifi_test_dashboard"
+  log_info "Version: $VERSION"
+  log_info "Repository: $REPO_URL"
+  echo
 
-check_prerequisites
-ensure_fresh_install_state
-main_installation_sequence
-validate_installation || true
-show_final_status
+  check_prerequisites
+  ensure_fresh_install_state
+  main_installation_sequence
+
+  if validate_installation; then
+    show_final_status
+    exit 0
+  else
+    log_error "Installation validation failed"
+    log_error "Some components may not work correctly"
+    log_error "Check the dashboard and logs for more information"
+    show_final_status  # Still show next steps
+    exit 1
+  fi
+}
+
+# Execute main function
+main "$@"
