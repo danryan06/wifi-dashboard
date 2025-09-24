@@ -1442,13 +1442,25 @@
                         previousStats[iface] = { rx_bytes: 0, tx_bytes: 0 };
                     }
                     
-                    // Calculate bytes transferred since last update
-                    const timeDelta = 10; // 10 second refresh interval
-                    const newRxBytes = stats.download * timeDelta; // download is in bytes/sec
-                    const newTxBytes = stats.upload * timeDelta; // upload is in bytes/sec
-                    
-                    cumulativeStats[iface].rx_bytes += newRxBytes;
-                    cumulativeStats[iface].tx_bytes += newTxBytes;
+                    // Assume stats.download / stats.upload are already in Mbps
+                    const timeDelta = 10; // refresh interval in seconds
+
+                    // Convert Mbps → MB/s (divide by 8), then × timeDelta
+                    const mbDownloaded = (stats.download / 8) * timeDelta;
+                    const mbUploaded   = (stats.upload   / 8) * timeDelta;
+
+                    // Initialize if needed
+                    if (!cumulativeStats[iface]) {
+                        cumulativeStats[iface] = { rx_mb: 0, tx_mb: 0 };
+                    }
+
+                    // Add this interval’s totals
+                    cumulativeStats[iface].rx_mb += mbDownloaded;
+                    cumulativeStats[iface].tx_mb += mbUploaded;
+
+                    // Format for display (already in MB)
+                    const totalRxMB = cumulativeStats[iface].rx_mb.toFixed(1);
+                    const totalTxMB = cumulativeStats[iface].tx_mb.toFixed(1);
                 }
                 
                 console.log(`[updateThroughputDisplay] Raw values for ${iface} → download: ${stats.download}, upload: ${stats.upload}`);
