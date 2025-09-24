@@ -17,12 +17,13 @@ SETTINGS_FILE = os.path.join(BASE_DIR, "configs", "settings.conf")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 
 @app.after_request
-def _no_cache(resp):
-    # Stop browsers/proxies from caching JSON endpoints like /api/logs/...
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
-    return resp
+def after_request(response):
+    # Prevent caching of API responses
+    if request.path.startswith('/api/'):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 # Throughput monitoring with persistent storage
 last_stats = {}
@@ -175,70 +176,99 @@ def get_network_stats():
     return stats
 
 def read_persistent_stats(interface):
-    """Read persistent stats from client-generated JSON files"""
+    """FIXED: Read persistent stats with better error handling"""
     stats_file = os.path.join(BASE_DIR, "stats", f"stats_{interface}.json")
+    
+    # Ensure stats directory exists
+    stats_dir = os.path.join(BASE_DIR, "stats")
+    os.makedirs(stats_dir, exist_ok=True)
+    
     try:
         if os.path.exists(stats_file):
             with open(stats_file, 'r') as f:
                 data = json.load(f)
+                # Validate data structure
                 return {
-                    'download': data.get('download', 0),
-                    'upload': data.get('upload', 0),
-                    'timestamp': data.get('timestamp', time.time())
+                    'download': max(0, int(data.get('download', 0))),
+                    'upload': max(0, int(data.get('upload', 0))),
+                    'timestamp': float(data.get('timestamp', time.time()))
                 }
-        return {'download': 0, 'upload': 0, 'timestamp': time.time()}
-    except Exception as e:
+        else:
+            # Create initial stats file
+            initial_stats = {
+                'download': 0, 
+                'upload': 0, 
+                'timestamp': time.time()
+            }
+            with open(stats_file, 'w') as f:
+                json.dump(initial_stats, f)
+            return initial_stats
+            
+    except (json.JSONDecodeError, ValueError, IOError) as e:
         logger.error(f"Error reading persistent stats for {interface}: {e}")
-        return {'download': 0, 'upload': 0, 'timestamp': time.time()}
+        # Return safe defaults
+        return {
+            'download': 0, 
+            'upload': 0, 
+            'timestamp': time.time()
+        }
 
 def calculate_throughput():
     """
-    Calculate throughput based on /proc/net/dev deltas and always include
-    known interfaces (eth0, good, bad) with persistent totals even if no delta.
+    FIXED: Calculate throughput with better error handling and interface filtering
     """
     global last_stats, last_stats_time
 
     now = time.time()
-    current_stats = get_network_stats()  # iface -> counters
+    current_stats = get_network_stats()
     throughput = {}
 
-    # Build service map from assignments
+    # Build service map from assignments with error handling
     try:
         a = get_interface_assignments()
         good_iface = a.get('good_interface', 'wlan0')
-        bad_iface  = a.get('bad_interface')
+        bad_iface = a.get('bad_interface', 'wlan1')
         wired_iface = a.get('wired_interface', 'eth0')
 
         service_map = {
             wired_iface: 'wired-test',
-            good_iface:  'wifi-good',
+            good_iface: 'wifi-good',
         }
-        if bad_iface:
+        if bad_iface and bad_iface != 'none':
             service_map[bad_iface] = 'wifi-bad'
-    except Exception:
-        good_iface, bad_iface, wired_iface = 'wlan0', None, 'eth0'
+    except Exception as e:
+        logger.error(f"Error reading interface assignments: {e}")
+        good_iface, bad_iface, wired_iface = 'wlan0', 'wlan1', 'eth0'
         service_map = {
             'eth0': 'wired-test',
-            'wlan0': 'wifi-good'
+            'wlan0': 'wifi-good',
+            'wlan1': 'wifi-bad'
         }
 
-    # Candidate ifaces we want to expose even without deltas
-    candidates = {wired_iface, good_iface}
-    if bad_iface:
+    # FIXED: Only include physical interfaces, filter out virtual ones
+    candidates = set()
+    for iface in current_stats.keys():
+        # Skip virtual interfaces
+        if any(skip in iface for skip in ['lo', 'docker', 'veth', 'br-']):
+            continue
+        candidates.add(iface)
+    
+    # Always include our expected interfaces even if not in current stats
+    candidates.update({wired_iface, good_iface})
+    if bad_iface and bad_iface != 'none':
         candidates.add(bad_iface)
-    # Also include anything we actually saw in /proc/net/dev
-    candidates |= set(current_stats.keys())
 
-    # Compute deltas where possible
+    # Compute deltas
     have_prev = bool(last_stats) and last_stats_time > 0
-    dt = max(0.0001, now - (last_stats_time or now))  # avoid div/0
+    dt = max(0.001, now - (last_stats_time or now))  # Avoid division by zero
 
     for iface in candidates:
         cur = current_stats.get(iface)
         prev = last_stats.get(iface) if have_prev else None
 
+        # Calculate rates
         if cur and prev:
-            rx_rate = max(0, (cur['rx_bytes'] - prev['rx_bytes']) / dt)  # bytes/s
+            rx_rate = max(0, (cur['rx_bytes'] - prev['rx_bytes']) / dt)
             tx_rate = max(0, (cur['tx_bytes'] - prev['tx_bytes']) / dt)
             rx_pkts = max(0, (cur['rx_packets'] - prev['rx_packets']))
             tx_pkts = max(0, (cur['tx_packets'] - prev['tx_packets']))
@@ -246,7 +276,8 @@ def calculate_throughput():
             rx_rate = tx_rate = 0.0
             rx_pkts = tx_pkts = 0
 
-        # Service active?
+        # FIXED: Better service active detection
+        active = False
         try:
             svc = service_map.get(iface, '')
             if svc:
@@ -254,16 +285,21 @@ def calculate_throughput():
                                    capture_output=True, text=True, timeout=2)
                 active = (r.stdout.strip() == 'active')
             else:
-                active = False
+                # For interfaces without services, check if they have an IP
+                active = bool(cur and cur.get('rx_bytes', 0) > 0)
         except Exception:
             active = False
 
-        # Persistent totals (these exist even if rate=0)
-        totals = read_persistent_stats(iface)
+        # Get persistent totals with error handling
+        try:
+            totals = read_persistent_stats(iface)
+        except Exception as e:
+            logger.error(f"Error reading persistent stats for {iface}: {e}")
+            totals = {'download': 0, 'upload': 0, 'timestamp': now}
 
         throughput[iface] = {
-            'download': rx_rate,     # bytes/s (converted to Mbps by /api/throughput)
-            'upload': tx_rate,
+            'download': rx_rate,  # bytes/s
+            'upload': tx_rate,    # bytes/s  
             'active': active,
             'rx_packets': rx_pkts,
             'tx_packets': tx_pkts,
@@ -272,9 +308,10 @@ def calculate_throughput():
             'stats_timestamp': totals.get('timestamp', now),
         }
 
-    # Snapshot for next pass
+    # Update for next calculation
     last_stats = current_stats
     last_stats_time = now
+    
     return throughput
 
 def get_system_info():
@@ -575,42 +612,69 @@ def api_logs(log_name):
         logger.error(f"Error in logs API endpoint: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-@app.route("/api/throughput")
+@app.route("/api/throughput")  
 def api_throughput():
-    """API endpoint for real-time throughput data with persistent totals"""
+    """FIXED: API endpoint for real-time throughput with better error handling"""
     try:
         throughput_data = calculate_throughput()
         
-        # Format throughput data with better units and persistent totals
+        # Format throughput data with better units
         formatted_data = {}
         for iface, data in throughput_data.items():
-            # Convert rates to Mbps
-            download_mbps = (data['download'] * 8) / (1024 * 1024)
-            upload_mbps = (data['upload'] * 8) / (1024 * 1024)
-            
-            # Format total bytes in human readable format
-            total_down_mb = data['total_download'] / (1024 * 1024)
-            total_up_mb = data['total_upload'] / (1024 * 1024)
-            
-            formatted_data[iface] = {
-                'download': download_mbps,
-                'upload': upload_mbps,
-                'active': data['active'],
-                'total_download': total_down_mb,
-                'total_upload': total_up_mb,
-                'rx_packets': data.get('rx_packets', 0),
-                'tx_packets': data.get('tx_packets', 0),
-                'stats_age': time.time() - data.get('stats_timestamp', time.time())
-            }
+            try:
+                # Convert rates to Mbps with safety checks
+                download_bps = float(data.get('download', 0))
+                upload_bps = float(data.get('upload', 0))
+                
+                download_mbps = (download_bps * 8) / (1024 * 1024)
+                upload_mbps = (upload_bps * 8) / (1024 * 1024)
+                
+                # Format totals in MB with safety checks
+                total_down_bytes = float(data.get('total_download', 0))
+                total_up_bytes = float(data.get('total_upload', 0))
+                
+                total_down_mb = total_down_bytes / (1024 * 1024)
+                total_up_mb = total_up_bytes / (1024 * 1024)
+                
+                formatted_data[iface] = {
+                    'download': round(download_mbps, 3),
+                    'upload': round(upload_mbps, 3), 
+                    'active': bool(data.get('active', False)),
+                    'total_download': round(total_down_mb, 2),
+                    'total_upload': round(total_up_mb, 2),
+                    'rx_packets': int(data.get('rx_packets', 0)),
+                    'tx_packets': int(data.get('tx_packets', 0)),
+                    'stats_age': max(0, time.time() - float(data.get('stats_timestamp', time.time())))
+                }
+                
+            except (ValueError, TypeError) as e:
+                logger.error(f"Error formatting throughput data for {iface}: {e}")
+                # Provide safe fallback data
+                formatted_data[iface] = {
+                    'download': 0.0,
+                    'upload': 0.0,
+                    'active': False,
+                    'total_download': 0.0,
+                    'total_upload': 0.0,
+                    'rx_packets': 0,
+                    'tx_packets': 0,
+                    'stats_age': 0
+                }
         
         return jsonify({
             "success": True,
             "throughput": formatted_data,
             "timestamp": datetime.now().isoformat()
         })
+        
     except Exception as e:
         logger.error(f"Error in throughput endpoint: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({
+            "success": False, 
+            "error": str(e),
+            "throughput": {},
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 @app.route("/api/interfaces")
 def api_interfaces():
