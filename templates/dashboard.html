@@ -1386,32 +1386,38 @@
         
         // Real-time throughput monitoring functions - ENHANCED VERSION
         async function updateThroughputStats() {
-            try {
-                const response = await fetch('/api/throughput');
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.success && data.throughput) {
-                        updateThroughputDisplay(data.throughput);
-                    } else {
-                        console.log('Throughput API returned unsuccessful response');
-                        showFallbackThroughput();
-                    }
-                } else {
-                    console.log('Throughput API not available, response:', response.status);
-                    showFallbackThroughput();
-                }
-            } catch (error) {
-                console.log('Throughput API error:', error);
+    console.log("[updateThroughputStats] Starting API call…");
+    try {
+        const response = await fetch('/api/throughput');
+        console.log("[updateThroughputStats] Response status:", response.status);
+
+        if (response.ok) {
+            const data = await response.json();
+            console.log("[updateThroughputStats] Response JSON:", data);
+
+            if (data.success && data.throughput) {
+                updateThroughputDisplay(data.throughput);
+            } else {
+                console.warn("[updateThroughputStats] Invalid JSON format:", data);
                 showFallbackThroughput();
             }
+        } else {
+            console.warn("[updateThroughputStats] Fetch failed:", response.status);
+            showFallbackThroughput();
         }
+    } catch (error) {
+        console.error("[updateThroughputStats] Error:", error);
+        showFallbackThroughput();
+    }
+}
+
 
         function updateThroughputDisplay(throughputData) {
+            console.log("[updateThroughputDisplay] Throughput data received:", throughputData);
+
             const container = document.getElementById('throughput-grid');
-            
-            // Always show all three interfaces
             const allInterfaces = ['eth0', 'wlan0', 'wlan1'];
-            
+
             container.innerHTML = allInterfaces.map(iface => {
                 const stats = throughputData[iface] || { 
                     download: 0, 
@@ -1420,6 +1426,11 @@
                     rx_packets: 0, 
                     tx_packets: 0 
                 };
+
+                console.log(`[updateThroughputDisplay] Interface: ${iface}`, stats);
+
+                // …rest of your rendering logic…
+
                 
                 // Check if interface exists in system
                 const interfaceExists = throughputData[iface] !== undefined;
