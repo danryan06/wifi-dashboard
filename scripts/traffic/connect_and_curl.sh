@@ -729,30 +729,75 @@ EOF
   return 1
 }
 
-# FIXED: Enhanced traffic generation with persistent stats
+## FIXED: Enhanced traffic generation with relaxed health checks
 generate_realistic_traffic() {
   if [[ "$ENABLE_INTEGRATED_TRAFFIC" != "true" ]]; then return 0; fi
 
+  # FIXED: More permissive health check
   local st ip ss
-  st="$(nm_state)"; ip="$(current_ip)"; ss="$(current_ssid)"
-  if [[ "$st" != "100" || -z "$ip" || "$ss" != "$SSID" ]]; then
-    log_msg "⚠️ Traffic suppressed: link not healthy"
+  st="$(nm_state)"
+  ip="$(current_ip)" 
+  ss="$(current_ssid)"
+  
+  # NEW: Accept multiple "good" states, not just "100"
+  # NetworkManager states: 10=unmanaged, 20=unavailable, 30=disconnected, 
+  # 50=prepare, 60=config, 70=need_auth, 80=ip_config, 90=ip_check, 100=activated
+  # FIXED: More permissive health check
+  if [[ "$st" != "100" && "$st" != "90" && "$st" != "80" ]]; then
+      log_msg "⚠️ Traffic suppressed: NetworkManager state not ready (state: $st)"
+      return 1
+  fi
+
+  if [[ -z "$ip" ]]; then
+      log_msg "⚠️ Traffic suppressed: No IP address assigned"
+      return 1
+  fi
+
+  # FIXED: Don't suppress traffic if SSID doesn't match exactly - could be roaming
+  if [[ -n "$ss" && -n "$SSID" && "$ss" != "$SSID" ]]; then
+      log_msg "ℹ️ Note: Connected to '$ss', expected '$SSID' (may be roaming)"
+      # Don't return 1 here - continue with traffic generation
+  fi
+
+  # Check for IP - but be more flexible about SSID matching  
+  if [[ -z "$ip" ]]; then
+    log_msg "⚠️ Traffic suppressed: No IP address assigned"
     return 1
   fi
 
-  log_msg "🚀 Starting realistic traffic generation (intensity: $TRAFFIC_INTENSITY)..."
+  # FIXED: Don't suppress traffic if SSID doesn't match exactly - could be roaming
+  if [[ -n "$ss" && -n "$SSID" && "$ss" != "$SSID" ]]; then
+    log_msg "ℹ️ Note: Connected to '$ss', expected '$SSID' (may be roaming)"
+    # Don't return 1 here - continue with traffic generation
+  fi
 
-  if ! test_basic_connectivity; then
-    log_msg "❌ Basic connectivity failed; skipping traffic"
+  log_msg "🚀 Starting realistic traffic generation (intensity: $TRAFFIC_INTENSITY, IP: $ip)"
+
+  # Quick connectivity test before heavy traffic
+  if ! timeout 10 ping -I "$INTERFACE" -c 2 -W 3 8.8.8.8 >/dev/null 2>&1; then
+    log_msg "❌ Basic connectivity failed; skipping heavy traffic"
     return 1
   fi
 
-  # Download traffic
+  # Download traffic with better error handling
   local url="${DOWNLOAD_URLS[$((RANDOM % ${#DOWNLOAD_URLS[@]}))]}"
   local tmp_file="/tmp/test_download_$$"
   
   log_msg "📥 Downloading from: $(basename "$url")"
-  if timeout 60 curl --interface "$INTERFACE" -fsSL --max-time 45 -o "$tmp_file" "$url" 2>/dev/null; then
+  
+  # FIXED: Use curl with interface binding and better timeout handling
+  if timeout 120 curl \
+      --interface "$INTERFACE" \
+      --connect-timeout 15 \
+      --max-time 90 \
+      --retry 2 \
+      --retry-delay 5 \
+      --silent \
+      --location \
+      --fail \
+      --output "$tmp_file" \
+      "$url" 2>/dev/null; then
+    
     if [[ -f "$tmp_file" ]]; then
       local bytes
       bytes=$(stat -c%s "$tmp_file" 2>/dev/null || stat -f%z "$tmp_file" 2>/dev/null || echo 0)
@@ -761,53 +806,52 @@ generate_realistic_traffic() {
       rm -f "$tmp_file"
     fi
   else
-    log_msg "❌ Download failed"
+    log_msg "❌ Download failed (network may be slow or congested)"
+    rm -f "$tmp_file"
   fi
 
-  # Upload traffic
+  # Upload traffic with retry logic
   local upload_url="https://httpbin.org/post"
   local upload_size=102400  # 100KB
   
   log_msg "📤 Uploading test data..."
-  if timeout 30 dd if=/dev/zero bs=1024 count=100 2>/dev/null | \
-     curl --interface "$INTERFACE" -fsSL --max-time 25 -X POST -o /dev/null "$upload_url" --data-binary @- 2>/dev/null; then
+  if timeout 60 dd if=/dev/zero bs=1024 count=100 2>/dev/null | \
+     curl --interface "$INTERFACE" \
+          --connect-timeout 10 \
+          --max-time 45 \
+          --retry 1 \
+          --silent \
+          --fail \
+          -X POST \
+          -o /dev/null \
+          "$upload_url" \
+          --data-binary @- 2>/dev/null; then
     TOTAL_UP=$((TOTAL_UP + upload_size))
     log_msg "✅ Uploaded $upload_size bytes (Total: ${TOTAL_UP})"
   else
-    log_msg "❌ Upload failed"
+    log_msg "❌ Upload failed (may be network congestion)"
   fi
 
-  # Ping traffic
-  local ping_target="${PING_TARGETS[$((RANDOM % ${#PING_TARGETS[@]}))]}"
-  if timeout 30 ping -I "$INTERFACE" -c "$PING_COUNT" -i 0.5 "$ping_target" >/dev/null 2>&1; then
-    log_msg "✅ Ping traffic successful ($ping_target)"
-  else
-    log_msg "❌ Ping traffic failed ($ping_target)"
-  fi
+  # Multiple ping targets for better reliability
+  local ping_success=0
+  local ping_total=${#PING_TARGETS[@]}
+  
+  for ping_target in "${PING_TARGETS[@]}"; do
+    if timeout 30 ping -I "$INTERFACE" -c "$PING_COUNT" -i 0.5 "$ping_target" >/dev/null 2>&1; then
+      log_msg "✅ Ping successful: $ping_target"
+      ((ping_success++))
+    else
+      log_msg "⚠️ Ping failed: $ping_target"
+    fi
+  done
+  
+  log_msg "📊 Ping results: $ping_success/$ping_total targets reachable"
 
   # Save stats persistently
   save_stats
 
   log_msg "✅ Traffic generation completed (Down: ${TOTAL_DOWN}B, Up: ${TOTAL_UP}B)"
-}
-
-select_roaming_target() {
-  local cur="$1" best="" best_sig=-100
-  
-  for b in "${!DISCOVERED_BSSIDS[@]}"; do
-    [[ "$b" == "$cur" ]] && continue
-    local s="${BSSID_SIGNALS[$b]}"
-    
-    (( s > MIN_SIGNAL_THRESHOLD )) || continue
-    
-    # For demo: roam to any available BSSID that's stronger than current
-    if (( s > best_sig )); then 
-      best_sig=$s
-      best="$b"
-    fi
-  done
-  
-  [[ -n "$best" ]] && echo "$best" || echo ""
+  return 0
 }
 
 perform_roaming() {
@@ -970,6 +1014,34 @@ test_basic_connectivity() {
   return $([[ $success_count -gt 0 ]] && echo 0 || echo 1)
 }
 
+# FIXED: More permissive connection health assessment
+assess_connection_health() {
+  local st ip ss
+  st="$(nm_state)"
+  ip="$(current_ip)"
+  ss="$(current_ssid)"
+  
+  # Accept states 80, 90, 100 as "healthy enough"
+  if [[ "$st" == "100" || "$st" == "90" || "$st" == "80" ]] && [[ -n "$ip" ]]; then
+    # Connected with IP - this is healthy
+    if [[ -n "$ss" && -n "$SSID" ]]; then
+      if [[ "$ss" == "$SSID" ]]; then
+        log_msg "✅ Connection healthy: SSID='$ss', IP=$ip, state=$st"
+        return 0
+      else
+        log_msg "ℹ️ Connection active but SSID mismatch: current='$ss', expected='$SSID' (may be roaming)"
+        return 0  # Still consider healthy for traffic generation
+      fi
+    else
+      log_msg "✅ Connection active: IP=$ip, state=$st"
+      return 0
+    fi
+  else
+    log_msg "⚠️ Connection unhealthy: state=${st:-?}, IP=${ip:-none}, SSID=${ss:-none}"
+    return 1
+  fi
+}
+
 # FIXED: Main loop with enhanced error handling and proper identity management
 main_loop() {
     log_msg "🚀 Starting enhanced good client with persistent throughput tracking"
@@ -1006,24 +1078,22 @@ main_loop() {
             continue; 
         fi
 
-        # Check connection health
-        local st ip ss
-        st="$(nm_state)"
-        ip="$(current_ip)"
-        ss="$(current_ssid)"
-        
-        if [[ "$st" == "100" && -n "$ip" && "$ss" == "$SSID" ]]; then
-            log_msg "✅ Connection healthy: SSID='$ss', IP=$ip"
+        # Check connection health using new assessment
+        if assess_connection_health; then
+            # Connection is healthy, continue with normal operations
+            manage_roaming
+            if (( now - last_traffic > 30 )); then 
+                generate_realistic_traffic && last_traffic=$now
+            fi
         else
-            log_msg "⚠️ Connection issue: state=${st:-?} ip=${ip:-none} current='${ss:-none}' expected='$SSID'"
-            
+            # Connection needs attention
             if [[ -n "$SSID" && -n "$PASSWORD" ]]; then
-                log_msg "🔄 Attempting to (re)connect with SSID='$SSID'"
+                log_msg "🔄 Connection needs attention, attempting to reconnect"
                 if connect_to_wifi_with_roaming "$SSID" "$PASSWORD"; then
-                    log_msg "✅ Wi-Fi connection (re)established"
+                    log_msg "✅ Wi-Fi connection reestablished"
                     sleep 5
                 else
-                    log_msg "❌ Reconnect failed; retrying later"
+                    log_msg "❌ Reconnect failed; will retry in $REFRESH_INTERVAL seconds"
                     sleep "$REFRESH_INTERVAL"
                     continue
                 fi
@@ -1032,12 +1102,6 @@ main_loop() {
                 sleep "$REFRESH_INTERVAL"
                 continue
             fi
-        fi
-
-        # Roaming and traffic (only if connected)
-        manage_roaming
-        if (( now - last_traffic > 30 )); then 
-            generate_realistic_traffic && last_traffic=$now
         fi
 
         # Status update with identity verification
