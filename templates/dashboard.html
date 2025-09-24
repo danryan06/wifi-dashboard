@@ -1442,7 +1442,8 @@
                         previousStats[iface] = { rx_bytes: 0, tx_bytes: 0 };
                     }
                     
-                    // Assume stats.download / stats.upload are already in Mbps
+                    // --- Cumulative totals in MB (frontend only, resets on reload) ---
+
                     const timeDelta = 10; // refresh interval in seconds
 
                     // Convert Mbps → MB/s (divide by 8), then × timeDelta
@@ -1461,6 +1462,7 @@
                     // Format for display (already in MB)
                     const totalRxMB = cumulativeStats[iface].rx_mb.toFixed(1);
                     const totalTxMB = cumulativeStats[iface].tx_mb.toFixed(1);
+
                 }
                 
                 console.log(`[updateThroughputDisplay] Raw values for ${iface} → download: ${stats.download}, upload: ${stats.upload}`);
