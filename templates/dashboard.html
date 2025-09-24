@@ -1451,11 +1451,14 @@
                     cumulativeStats[iface].tx_bytes += newTxBytes;
                 }
                 
-                // Convert bytes/sec to Mbps for display
-                const downloadMbps = (stats.download * 8 / 1024 / 1024).toFixed(2);
-                const uploadMbps = (stats.upload * 8 / 1024 / 1024).toFixed(2);
-                
-                // Convert cumulative bytes to MB
+                console.log(`[updateThroughputDisplay] Raw values for ${iface} → download: ${stats.download}, upload: ${stats.upload}`);
+
+
+                // Use values directly from API (already in Mbps)
+                const downloadMbps = stats.download.toFixed(2);
+                const uploadMbps   = stats.upload.toFixed(2);
+
+                // Keep cumulative totals in MB as-is
                 const totalRxMB = (cumulativeStats[iface].rx_bytes / 1024 / 1024).toFixed(1);
                 const totalTxMB = (cumulativeStats[iface].tx_bytes / 1024 / 1024).toFixed(1);
                 
