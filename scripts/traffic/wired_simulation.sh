@@ -13,6 +13,24 @@ STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE:-eth0}.json"
 
 set +e  # Keep service alive on errors
 
+# Load persistent stats
+load_stats() {
+  if [[ -f "$STATS_FILE" ]]; then
+    local stats_content
+    stats_content=$(cat "$STATS_FILE" 2>/dev/null || echo '{"download": 0, "upload": 0}')
+    TOTAL_DOWN=$(echo "$stats_content" | jq -r '.download // 0' 2>/dev/null || echo 0)
+    TOTAL_UP=$(echo "$stats_content" | jq -r '.upload // 0' 2>/dev/null || echo 0)
+  else
+    TOTAL_DOWN=0
+    TOTAL_UP=0
+  fi
+  log_msg "📊 Loaded stats: Down=${TOTAL_DOWN}B, Up=${TOTAL_UP}B"
+}
+
+save_stats() {
+  echo "{\"download\": $TOTAL_DOWN, \"upload\": $TOTAL_UP, \"timestamp\": $(date +%s)}" > "$STATS_FILE"
+}
+
 log_msg() {
     local msg="[$(date '+%F %T')] WIRED: $1"
     echo "$msg" | tee -a "$LOG_FILE"
@@ -133,7 +151,7 @@ test_connectivity() {
 generate_heavy_traffic() {
     log_msg "Starting heavy traffic generation"
     
-    # Background ping traffic
+    # Background ping traffic (no byte tracking needed - minimal overhead)
     {
         for target in "${PING_TARGETS[@]}"; do
             timeout 30 ping -I "$INTERFACE" -c 10 -i 0.5 "$target" >/dev/null 2>&1 && \
@@ -141,44 +159,109 @@ generate_heavy_traffic() {
         done
     } &
     
-    # Download traffic
+    # Download traffic with byte tracking
     {
         local url="${DOWNLOAD_URLS[0]}"
+        local tmp_file="/tmp/wired_download_$$"
         log_msg "Starting download: $(basename "$url")"
         if timeout 120 curl --interface "$INTERFACE" \
                --max-time 90 \
                --silent \
                --location \
-               --output /dev/null \
+               --output "$tmp_file" \
                "$url" 2>/dev/null; then
-            log_msg "✓ Download completed: $(basename "$url")"
+            # Track the downloaded bytes
+            if [[ -f "$tmp_file" ]]; then
+                local bytes
+                bytes=$(stat -c%s "$tmp_file" 2>/dev/null || stat -f%z "$tmp_file" 2>/dev/null || echo 0)
+                TOTAL_DOWN=$((TOTAL_DOWN + bytes))
+                log_msg "✓ Download completed: $(basename "$url") - $bytes bytes (Total Down: ${TOTAL_DOWN}B)"
+                rm -f "$tmp_file"
+            fi
         else
             log_msg "✗ Download failed: $(basename "$url")"
+            rm -f "$tmp_file"
         fi
     } &
     
-    # HTTP traffic
+    # HTTP traffic with byte tracking
     {
         for url in "${TEST_URLS[@]}"; do
             for i in {1..3}; do
-                timeout 15 curl --interface "$INTERFACE" --max-time 10 -s "$url" >/dev/null 2>&1 && \
-                log_msg "✓ HTTP traffic $i: $(basename "$url")" || log_msg "✗ HTTP traffic $i failed: $(basename "$url")"
+                local tmp_http="/tmp/wired_http_$$_$i"
+                if timeout 15 curl --interface "$INTERFACE" \
+                       --max-time 10 \
+                       --silent \
+                       --output "$tmp_http" \
+                       "$url" 2>/dev/null; then
+                    # Track HTTP response bytes
+                    if [[ -f "$tmp_http" ]]; then
+                        local bytes
+                        bytes=$(stat -c%s "$tmp_http" 2>/dev/null || stat -f%z "$tmp_http" 2>/dev/null || echo 0)
+                        TOTAL_DOWN=$((TOTAL_DOWN + bytes))
+                        log_msg "✓ HTTP traffic $i: $(basename "$url") - $bytes bytes"
+                        rm -f "$tmp_http"
+                    fi
+                else
+                    log_msg "✗ HTTP traffic $i failed: $(basename "$url")"
+                    rm -f "$tmp_http"
+                fi
                 sleep 1
             done
         done
     } &
     
-    # DNS traffic
+    # Upload traffic with byte tracking
     {
-        local domains=("google.com" "cloudflare.com" "github.com" "juniper.net")
-        for domain in "${domains[@]}"; do
-            nslookup "$domain" >/dev/null 2>&1 && \
-            log_msg "✓ DNS query: $domain" || log_msg "✗ DNS query failed: $domain"
-        done
+        local upload_size=102400  # 100KB
+        local upload_data="/tmp/wired_upload_$$"
+        
+        # Create upload data
+        dd if=/dev/zero of="$upload_data" bs=1024 count=100 2>/dev/null
+        
+        if timeout 60 curl --interface "$INTERFACE" \
+               --connect-timeout 10 \
+               --max-time 45 \
+               --silent \
+               -X POST \
+               -o /dev/null \
+               "https://httpbin.org/post" \
+               --data-binary "@$upload_data" 2>/dev/null; then
+            TOTAL_UP=$((TOTAL_UP + upload_size))
+            log_msg "✓ Upload completed: $upload_size bytes (Total Up: ${TOTAL_UP}B)"
+        else
+            log_msg "✗ Upload failed"
+        fi
+        
+        rm -f "$upload_data"
     } &
     
+    # DNS traffic (minimal bytes, but we can estimate)
+    {
+        local domains=("google.com" "cloudflare.com" "github.com" "juniper.net")
+        local dns_bytes=0
+        for domain in "${domains[@]}"; do
+            if nslookup "$domain" >/dev/null 2>&1; then
+                dns_bytes=$((dns_bytes + 512))  # Estimate ~512 bytes per DNS query (request + response)
+                log_msg "✓ DNS query: $domain"
+            else
+                log_msg "✗ DNS query failed: $domain"
+            fi
+        done
+        if [[ $dns_bytes -gt 0 ]]; then
+            TOTAL_DOWN=$((TOTAL_DOWN + dns_bytes))
+            TOTAL_UP=$((TOTAL_UP + dns_bytes))
+        fi
+    } &
+    
+    # Wait for all background jobs to complete
     wait
+    
+    # Save stats after all traffic generation is complete
+    save_stats
+    
     log_msg "✓ Heavy traffic generation cycle completed"
+    log_msg "📊 Session totals: Down=${TOTAL_DOWN}B ($(echo "scale=2; $TOTAL_DOWN/1024/1024" | bc 2>/dev/null || echo "?")MB), Up=${TOTAL_UP}B ($(echo "scale=2; $TOTAL_UP/1024/1024" | bc 2>/dev/null || echo "?")MB)"
 }
 
 request_dhcp_if_needed() {
@@ -202,6 +285,9 @@ request_dhcp_if_needed() {
 main_loop() {
     log_msg "Starting wired client simulation with hostname: $HOSTNAME"
     log_msg "Interface: $INTERFACE"
+    
+    # Initialize stats tracking
+    load_stats
     
     # CRITICAL: Claim hostname FIRST before any network activity
     claim_dhcp_hostname

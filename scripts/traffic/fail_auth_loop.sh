@@ -13,7 +13,25 @@ DASHBOARD_DIR="/home/pi/wifi_test_dashboard"
 mkdir -p "$DASHBOARD_DIR/stats"
 STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE:-wlan1}.json"
 
+# Add after STATS_FILE definition, before the functions
 
+# Load persistent stats
+load_stats() {
+  if [[ -f "$STATS_FILE" ]]; then
+    local stats_content
+    stats_content=$(cat "$STATS_FILE" 2>/dev/null || echo '{"download": 0, "upload": 0}')
+    TOTAL_DOWN=$(echo "$stats_content" | jq -r '.download // 0' 2>/dev/null || echo 0)
+    TOTAL_UP=$(echo "$stats_content" | jq -r '.upload // 0' 2>/dev/null || echo 0)
+  else
+    TOTAL_DOWN=0
+    TOTAL_UP=0
+  fi
+  log_msg "📊 Loaded stats: Down=${TOTAL_DOWN}B, Up=${TOTAL_UP}B"
+}
+
+save_stats() {
+  echo "{\"download\": $TOTAL_DOWN, \"upload\": $TOTAL_UP, \"timestamp\": $(date +%s)}" > "$STATS_FILE"
+}
 
 # HOSTNAME LOCK SYSTEM - NEW
 HOSTNAME_LOCK_DIR="/var/run/wifi-dashboard"
@@ -424,13 +442,18 @@ EOF
 
 generate_probe_traffic() {
     log_msg "📡 Generating probe request traffic..."
+    local probe_bytes=0
     for i in {1..3}; do
         $SUDO nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
+        probe_bytes=$((probe_bytes + 1024))  # Estimate ~1KB per scan
         sleep 2
     done
+    TOTAL_UP=$((TOTAL_UP + probe_bytes))
+    save_stats
+    
     local network_count
     network_count=$($SUDO nmcli device wifi list ifname "$INTERFACE" 2>/dev/null | wc -l || echo "0")
-    log_msg "📊 Probe scan cycle completed: $network_count networks visible"
+    log_msg "📊 Probe scan cycle completed: $network_count networks visible (Total traffic: ${TOTAL_UP}B)"
     sleep $((2 + RANDOM % 3))
 }
 
