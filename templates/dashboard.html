@@ -1085,11 +1085,7 @@
         let refreshPaused = false;
         let throughputData = {};
         let previousStats = {};
-        let cumulativeStats = {
-            'eth0': { rx_bytes: 0, tx_bytes: 0 },
-            'wlan0': { rx_bytes: 0, tx_bytes: 0 },
-            'wlan1': { rx_bytes: 0, tx_bytes: 0 }
-        };
+       
         
         // Enhanced log viewing variables
         let currentLogName = 'main';
@@ -1424,57 +1420,23 @@
                     upload: 0, 
                     active: false, 
                     rx_packets: 0, 
-                    tx_packets: 0 
+                    tx_packets: 0,
+                    total_download: 0,  // Backend provides this in MB
+                    total_upload: 0     // Backend provides this in MB
                 };
 
                 console.log(`[updateThroughputDisplay] Interface: ${iface}`, stats);
-
-                // …rest of your rendering logic…
-
                 
                 // Check if interface exists in system
                 const interfaceExists = throughputData[iface] !== undefined;
                 const isOffline = !interfaceExists || (!stats.active && stats.download === 0 && stats.upload === 0);
                 
-                // Update cumulative stats if interface is active
-                if (interfaceExists && (stats.download > 0 || stats.upload > 0)) {
-                    if (!previousStats[iface]) {
-                        previousStats[iface] = { rx_bytes: 0, tx_bytes: 0 };
-                    }
-                    
-                    // --- Cumulative totals in MB (frontend only, resets on reload) ---
-
-                    const timeDelta = 10; // refresh interval in seconds
-
-                    // Convert Mbps → MB/s (divide by 8), then × timeDelta
-                    const mbDownloaded = (stats.download / 8) * timeDelta;
-                    const mbUploaded   = (stats.upload   / 8) * timeDelta;
-
-                    // Initialize if needed
-                    if (!cumulativeStats[iface]) {
-                        cumulativeStats[iface] = { rx_mb: 0, tx_mb: 0 };
-                    }
-
-                    // Add this interval’s totals
-                    cumulativeStats[iface].rx_mb += mbDownloaded;
-                    cumulativeStats[iface].tx_mb += mbUploaded;
-
-                    // Format for display (already in MB)
-                    const totalRxMB = cumulativeStats[iface].rx_mb.toFixed(1);
-                    const totalTxMB = cumulativeStats[iface].tx_mb.toFixed(1);
-
-                }
-                
-                console.log(`[updateThroughputDisplay] Raw values for ${iface} → download: ${stats.download}, upload: ${stats.upload}`);
-
-
-                // Use values directly from API (already in Mbps)
+                // FIXED: Use the totals directly from the backend API
+                // The backend already provides these in MB from persistent stats files
                 const downloadMbps = stats.download.toFixed(2);
-                const uploadMbps   = stats.upload.toFixed(2);
-
-                // Keep cumulative totals in MB as-is
-                const totalRxMB = (cumulativeStats[iface].rx_bytes / 1024 / 1024).toFixed(1);
-                const totalTxMB = (cumulativeStats[iface].tx_bytes / 1024 / 1024).toFixed(1);
+                const uploadMbps = stats.upload.toFixed(2);
+                const totalRxMB = stats.total_download.toFixed(1);  // Already in MB from API
+                const totalTxMB = stats.total_upload.toFixed(1);    // Already in MB from API
                 
                 // Calculate bar width (scale to 100 Mbps max)
                 const maxMbps = 100;
