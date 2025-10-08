@@ -389,45 +389,45 @@ check_wifi_interface() {
 }
 
 get_current_bssid() {
-  local b; b=$(iwconfig "$INTERFACE" 2>/dev/null | awk '/Access Point:/ {print $6; exit}')
-  b=$(echo "$b" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-  [[ "$b" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] && echo "$b" || echo ""
+  # Try nmcli first, then iw
+  local bssid=""
+  bssid="$(nmcli -t -f ACTIVE,BSSID,SSID dev wifi | awk -F: '$1=="yes"{print $2; exit}')" || true
+  if [[ -z "$bssid" || ! "$bssid" =~ : ]]; then
+    bssid="$(iw dev "$IFACE" link 2>/dev/null | awk '/Connected to/{print $3; exit}')" || true
+  fi
+  # Defensive fallback in case some tools format weirdly
+  bssid="${bssid//\\n/}"
+  bssid="${bssid//\\r/}"
+  bssid="${bssid//\\t/}"
+  bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
+  echo "$bssid"
 }
 
 # BSSID discovery
 discover_bssids_for_ssid() {
-  local target_ssid="$1" now; now=$(date +%s)
-  (( now - LAST_SCAN_TIME < ROAMING_SCAN_INTERVAL )) && return 0
-  [[ -z "$target_ssid" ]] && { log_msg "❌ discover_bssids_for_ssid called with empty SSID"; return 1; }
-  log_msg "🔍 Scanning for BSSIDs broadcasting SSID: '$target_ssid'"
-  DISCOVERED_BSSIDS=(); BSSID_SIGNALS=()
-  log_msg "🔄 Forcing fresh Wi-Fi scan..."; $SUDO nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1 || true; sleep 5
-  log_msg "📋 Listing available networks..."
-  local scan_output; scan_output=$($SUDO nmcli -t -f BSSID,SSID,SIGNAL device wifi list ifname "$INTERFACE" 2>/dev/null || echo "")
-  [[ -z "$scan_output" ]] && { log_msg "❌ nmcli wifi list returned no results"; return 1; }
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
-    if [[ "$line" =~ ^([0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}):([^:]*):([0-9]+)$ ]]; then
-      local bssid_escaped="${BASH_REMATCH[1]}" ssid="${BASH_REMATCH[2]}" signal="${BASH_REMATCH[3]}"
-      local bssid="${bssid_escaped//\\:/:}"; [[ -n "$ssid" ]] || continue
-      if [[ "$ssid" == "$target_ssid" ]]; then
-        local signal_dbm=$(( signal / 2 - 100 ))
-        if (( signal_dbm >= MIN_SIGNAL_THRESHOLD )); then
-          DISCOVERED_BSSIDS["$bssid"]="$ssid"; BSSID_SIGNALS["$bssid"]="$signal_dbm"
-          log_msg "🎯 Found matching BSSID: $bssid (Signal: ${signal_dbm} dBm, ${signal}%)"
-        fi
-      fi
-    fi
-  done <<< "$scan_output"
-  LAST_SCAN_TIME="$now"
-  local count=${#DISCOVERED_BSSIDS[@]}
-  if (( count == 0 )); then
-    log_msg "❌ No BSSIDs found for SSID: '$target_ssid'"; return 1
+  declare -gA BSSID_SIGNALS
+  BSSID_SIGNALS=()
+  nmcli dev wifi rescan >/dev/null 2>&1 || true
+  # Pull only the SSID we care about
+  while IFS=: read -r active bssid ssid signal; do
+    [[ "$ssid" != "$SSID" ]] && continue
+    # Normalize and fill map
+    bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
+    [[ "$bssid" =~ : ]] || continue
+    BSSID_SIGNALS["$bssid"]="$signal"
+  done < <(nmcli -t -f ACTIVE,BSSID,SSID,SIGNAL dev wifi 2>/dev/null)
+  # Log what we found
+  local count="${#BSSID_SIGNALS[@]}"
+  if (( count > 0 )); then
+    log_msg "✅ Found ${count} BSSID(s) for '$SSID'"
+    for k in "${!BSSID_SIGNALS[@]}"; do
+      log_msg "   Available: $k ($(( BSSID_SIGNALS[$k] * -1 )) dBm)"
+    done
+    return 0
   else
-    log_msg "✅ Found $count BSSID(s) for '$target_ssid'"
-    for b in "${!DISCOVERED_BSSIDS[@]}"; do log_msg "   Available: $b (${BSSID_SIGNALS[$b]} dBm)"; done
+    log_msg "⚠️  No BSSIDs discovered for '$SSID'"
+    return 1
   fi
-  return 0
 }
 
 prune_same_ssid_profiles() {
@@ -586,68 +586,68 @@ generate_realistic_traffic() {
 
 select_roaming_target() {
   local cur="$1"
-  local best="" 
+  cur="$(echo "$cur" | tr 'a-f' 'A-F')"  # normalize
+  local best=""
   local best_sig=-100
+  # If your SIGNAL is 0–100, ensure these thresholds are in the same scale
   local current_sig="${BSSID_SIGNALS[$cur]:-$MIN_SIGNAL_THRESHOLD}"
   local now=$(date +%s)
-  
-  log_msg "📊 Evaluating roaming from BSSID $cur (${current_sig} dBm)"
-  
+
+  log_msg "📊 Evaluating roaming from BSSID $cur (SIG ${current_sig})"
+
   # First, try to find a significantly better signal (normal roaming)
-  for b in "${!DISCOVERED_BSSIDS[@]}"; do
+  for b in "${!BSSID_SIGNALS[@]}"; do   # <— iterate over the map you actually use
     [[ "$b" == "$cur" ]] && continue
     local s="${BSSID_SIGNALS[$b]}"
-    
-    # Only consider BSSIDs above minimum threshold
+
+    # Only consider BSSIDs above minimum threshold (0–100 scale if using nmcli SIGNAL)
     if (( s <= MIN_SIGNAL_THRESHOLD )); then
-      log_msg "   ⊗ Skipping $b (${s} dBm - below threshold)"
+      log_msg "   ⊗ Skipping $b (SIG ${s} - below threshold)"
       continue
     fi
-    
-    # Check if significantly better
+
+    # Check if significantly better (still 0–100 scale)
     local signal_improvement=$((s - current_sig))
     if (( signal_improvement >= ROAMING_SIGNAL_DIFF )); then
-      if (( s > best_sig )); then 
+      if (( s > best_sig )); then
         best_sig=$s
         best="$b"
-        log_msg "   ✓ Better candidate: $b (${s} dBm, +${signal_improvement} dB improvement)"
+        log_msg "   ✓ Better candidate: $b (SIG ${s}, +${signal_improvement})"
       fi
     else
-      log_msg "   → Candidate $b (${s} dBm, +${signal_improvement} dB) - below +${ROAMING_SIGNAL_DIFF} dB threshold"
+      log_msg "   → Candidate $b (SIG ${s}, +${signal_improvement}) - below +${ROAMING_SIGNAL_DIFF} threshold"
     fi
   done
-  
+
   # If we found a significantly better signal, use it
   if [[ -n "$best" ]]; then
-    log_msg "🎯 Selected signal-based roaming target: $best (${best_sig} dBm)"
+    log_msg "🎯 Selected signal-based roaming target: $best (SIG ${best_sig})"
     echo "$best"
     return 0
   fi
-  
+
   # DEMO MODE: Opportunistic roaming when all signals are similar
   if [[ "$DEMO_MODE" == "true" ]]; then
     local time_since_last_roam=$((now - LAST_ROAM_TIME))
-    
+
     if (( time_since_last_roam >= OPPORTUNISTIC_ROAMING_INTERVAL )); then
       log_msg "🎪 Demo mode: Opportunistic roaming interval reached (${time_since_last_roam}s)"
-      
-      # Find any viable alternative BSSID (not current, above threshold)
+
       local alternatives=()
-      for b in "${!DISCOVERED_BSSIDS[@]}"; do
+      for b in "${!BSSID_SIGNALS[@]}"; do
         [[ "$b" == "$cur" ]] && continue
         local s="${BSSID_SIGNALS[$b]}"
         if (( s > MIN_SIGNAL_THRESHOLD )); then
           alternatives+=("$b")
-          log_msg "   • Alternative: $b (${s} dBm)"
+          log_msg "   • Alternative: $b (SIG ${s})"
         fi
       done
-      
+
       if (( ${#alternatives[@]} > 0 )); then
-        # Pick a random alternative to demonstrate roaming
         local idx=$((RANDOM % ${#alternatives[@]}))
         best="${alternatives[$idx]}"
         best_sig="${BSSID_SIGNALS[$best]}"
-        log_msg "🎯 Selected opportunistic roaming target: $best (${best_sig} dBm) - demo roaming"
+        log_msg "🎯 Selected opportunistic roaming target: $best (SIG ${best_sig}) - demo roaming"
         LAST_ROAM_TIME=$now
         echo "$best"
         return 0
@@ -659,24 +659,30 @@ select_roaming_target() {
       log_msg "⏱️  Opportunistic roaming in ${remaining}s (no better signal available)"
     fi
   fi
-  
+
   # No roaming target found
-  log_msg "📍 No suitable roaming target found; staying on $cur (${current_sig} dBm)"
+  log_msg "📍 No suitable roaming target found; staying on $cur (SIG ${current_sig})"
   echo ""
 }
 
+
 perform_roaming() {
-  local target_bssid="$1" target_ssid="$2" target_password="$3"
-  log_msg "🔄 Initiating roaming to BSSID: $target_bssid (SSID: $target_ssid)"
-  $SUDO nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1; sleep 3
-  if ! $SUDO nmcli device wifi list ifname "$INTERFACE" | grep -qi "$target_bssid"; then
-    log_msg "❌ Target BSSID $target_bssid no longer visible"; return 1
-  fi
-  if connect_locked_bssid "$target_bssid" "$target_ssid" "$target_password"; then
-    log_msg "✅ Roaming successful!"; CURRENT_BSSID="$target_bssid"; LAST_ROAM_TIME="$(date +%s)"; return 0
-  else
-    log_msg "❌ Roaming failed"; return 1
-  fi
+  local target_bssid="$1" ssid="$2" password="$3"
+
+  # Be explicit with NM so it doesn't outsmart us
+  nmcli con modify "$ssid" 802-11-wireless.bssid "$target_bssid" 2>/dev/null || true
+  nmcli con modify "$ssid" 802-11-wireless.mac-address "$WIFI_MAC" 2>/dev/null || true
+  nmcli con modify "$ssid" 802-11-wireless.cloned-mac-address "$WIFI_MAC" 2>/dev/null || true
+  nmcli con modify "$ssid" 802-11-wireless.powersave 2 2>/dev/null || true      # disable PS
+  nmcli set wifi.scan-rand-mac-address no 2>/dev/null || true
+
+  # Tear down cleanly and pin to target
+  nmcli dev disconnect "$IFACE" >/dev/null 2>&1 || true
+  sleep 2
+
+  # WPA3-Personal (SAE) reconnect pinned to BSSID
+  # NOTE: --rescan no keeps the selected BSSID
+  nmcli --wait 30 dev wifi connect "$ssid" ifname "$IFACE" bssid "$target_bssid" password "$password" --rescan no
 }
 
 connect_to_wifi_with_roaming() {
@@ -727,37 +733,38 @@ should_perform_roaming() {
 manage_roaming() {
   [[ "$ROAMING_ENABLED" != "true" ]] && return 0
   discover_bssids_for_ssid "$SSID" || return 0
+
   if should_perform_roaming; then
     log_msg "⏰ Roaming interval reached, evaluating roaming opportunity..."
-    CURRENT_BSSID="$(get_current_bssid)"
-    local target; target="$(select_roaming_target "$CURRENT_BSSID")"
-    
-    # Check if we actually found a roaming target
+    local current; current="$(get_current_bssid)"
+    current="$(echo "$current" | tr 'a-f' 'A-F')"
+    [[ -z "$current" ]] && { log_msg "⚠️  Current BSSID unknown, skipping roam"; return 0; }
+
+    local target; target="$(select_roaming_target "$current")"
     if [[ -n "$target" ]]; then
-      local target_signal="${BSSID_SIGNALS[$target]}" current_signal="${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown}"
-      log_msg "🔄 Roaming candidate: $target (${target_signal}dBm) vs current $CURRENT_BSSID (${current_signal}dBm)"
-      
-      # Protect against roaming failures crashing the script
-      set +e  # Temporarily disable exit-on-error
+      local t_sig="${BSSID_SIGNALS[$target]}"
+      local c_sig="${BSSID_SIGNALS[$current]:-unknown}"
+      log_msg "🔄 Roaming candidate: $target (SIG $t_sig) vs current $current (SIG ${c_sig})"
+
+      set +e
       if timeout 120 perform_roaming "$target" "$SSID" "$PASSWORD" 2>&1; then
         log_msg "✅ Roaming completed successfully"
         LAST_ROAM_TIME=$(date +%s)
       else
-        local exit_code=$?
-        if [ $exit_code -eq 124 ]; then
-          log_msg "⏱️  Roaming timed out after 120s - staying on current BSSID"
+        local rc=$?
+        if [[ $rc -eq 124 ]]; then
+          log_msg "⏱️  Roaming timed out (120s)"
         else
-          log_msg "❌ Roaming attempt failed (code: $exit_code) - staying on current BSSID"
+          log_msg "❌ Roaming failed (exit $rc)"
         fi
       fi
-      set -e  # Re-enable exit-on-error
-      
-      sleep 5
+      set -e
     else
-      log_msg "📍 No suitable roaming target found; staying on $CURRENT_BSSID"
+      log_msg "ℹ️  No better BSSID candidate found; skipping roam"
     fi
   fi
 }
+
 
 # Heuristic for connection health
 assess_connection_health() {
@@ -820,10 +827,11 @@ main_loop() {
         fi
         CURRENT_BSSID=$(get_current_bssid)
         if [[ -n "$CURRENT_BSSID" ]]; then
-            log_msg "📍 Current: BSSID $CURRENT_BSSID (${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown} dBm) | Available BSSIDs: ${#DISCOVERED_BSSIDS[@]} | Stats: D=${TOTAL_DOWN}B U=${TOTAL_UP}B"
+            log_msg "📍 Current: BSSID $CURRENT_BSSID (${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown} dBm) | Available BSSIDs: ${#BSSID_SIGNALS[@]} | Stats: D=${TOTAL_DOWN}B U=${TOTAL_UP}B"
         fi
         if (( now % 300 == 0 )); then verify_device_identity "$INTERFACE" "$HOSTNAME"; fi
         log_msg "✅ Good client operating normally"
+        save_stats
         sleep "$REFRESH_INTERVAL"
     done
 }
