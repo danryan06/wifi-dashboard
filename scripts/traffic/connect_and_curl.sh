@@ -13,13 +13,12 @@ CONFIG_FILE="$DASHBOARD_DIR/configs/ssid.conf"
 SETTINGS="$DASHBOARD_DIR/configs/settings.conf"
 ROTATE_UTIL="$DASHBOARD_DIR/scripts/log_rotation_utils.sh"
 mkdir -p "$DASHBOARD_DIR/stats"
-STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE:-wlan0}.json"
 
 INTERFACE="${INTERFACE:-wlan0}"
 HOSTNAME="${WIFI_GOOD_HOSTNAME:-${HOSTNAME:-CNXNMist-WiFiGood}}"
 LOG_MAX_SIZE_BYTES="${LOG_MAX_SIZE_BYTES:-10485760}"   # 10MB default
 
-# HOSTNAME LOCK SYSTEM - NEW ADDITION
+# HOSTNAME LOCK SYSTEM
 HOSTNAME_LOCK_DIR="/var/run/wifi-dashboard"
 HOSTNAME_LOCK_FILE="$HOSTNAME_LOCK_DIR/hostname-${INTERFACE}.lock"
 
@@ -61,7 +60,7 @@ log_msg() {
 }
 
 # =============================================================================
-# HOSTNAME LOCK SYSTEM - NEW FUNCTIONS
+# HOSTNAME LOCK SYSTEM
 # =============================================================================
 
 acquire_hostname_lock() {
@@ -71,32 +70,23 @@ acquire_hostname_lock() {
     local wait_count=0
     
     log_msg "🔒 Acquiring hostname lock for $interface -> $desired_hostname"
-    
-    # Create lock directory
     $SUDO mkdir -p "$HOSTNAME_LOCK_DIR"
     
-    # Wait for any existing locks to clear
     while [[ -f "$HOSTNAME_LOCK_FILE" && $wait_count -lt $max_wait ]]; do
         local existing_lock
         existing_lock=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
-        
-        if [[ "$existing_lock" == "${interface}:${desired_hostname}" ]]; then
+        if [[ "$existing_lock" == "${interface}:${desired_hostname}"* ]]; then
             log_msg "✅ Lock already held by this service"
             return 0
         fi
-        
         log_msg "⏳ Waiting for hostname lock to clear: $existing_lock"
         sleep 2
         ((wait_count += 2))
     done
     
-    # Acquire the lock
     echo "${interface}:${desired_hostname}:$(date +%s):$$" | $SUDO tee "$HOSTNAME_LOCK_FILE" >/dev/null
-    
-    # Verify we got the lock
     local lock_content
     lock_content=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
-    
     if [[ "$lock_content" == "${interface}:${desired_hostname}:"* ]]; then
         log_msg "✅ Hostname lock acquired successfully"
         return 0
@@ -108,11 +98,9 @@ acquire_hostname_lock() {
 
 release_hostname_lock() {
     local interface="$1"
-    
     if [[ -f "$HOSTNAME_LOCK_FILE" ]]; then
         local lock_content
         lock_content=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
-        
         if [[ "$lock_content" == "${interface}:"* ]]; then
             $SUDO rm -f "$HOSTNAME_LOCK_FILE"
             log_msg "🔓 Released hostname lock for $interface"
@@ -127,258 +115,157 @@ release_hostname_lock() {
 set_device_hostname() {
     local desired_hostname="$1"
     local interface="$2"
-    
-    # ACQUIRE LOCK BEFORE HOSTNAME OPERATIONS
     if ! acquire_hostname_lock "$interface" "$desired_hostname"; then
         log_msg "❌ Cannot set hostname - failed to acquire lock"
         return 1
     fi
     
     log_msg "🏷️ Setting DHCP hostname to: $desired_hostname for interface $interface (NOT changing system hostname)"
-    
-    # Get the MAC address for this interface for logging
     local mac_addr=$(ip link show "$interface" 2>/dev/null | awk '/link\/ether/ {print $2}' || echo "unknown")
     log_msg "📱 Interface $interface MAC address: $mac_addr"
     
-    # Method 1: Set NetworkManager DHCP hostname for this interface
-    log_msg "🌐 Setting DHCP hostname for interface $interface connections"
-    
-    # Configure all existing connections on this interface
     local existing_connections
     existing_connections=$($SUDO nmcli -t -f NAME,DEVICE connection show --active | grep ":$interface$" | cut -d: -f1)
-    
     if [[ -n "$existing_connections" ]]; then
         while read -r connection_name; do
-            if [[ -n "$connection_name" ]]; then
-                log_msg "🔧 Updating connection '$connection_name' DHCP hostname to '$desired_hostname'"
-                $SUDO nmcli connection modify "$connection_name" \
-                    connection.dhcp-hostname "$desired_hostname" \
-                    ipv4.dhcp-hostname "$desired_hostname" \
-                    ipv4.dhcp-send-hostname yes \
-                    ipv6.dhcp-hostname "$desired_hostname" \
-                    ipv6.dhcp-send-hostname yes 2>/dev/null && \
-                    log_msg "✅ Updated connection '$connection_name'" || \
-                    log_msg "⚠️ Failed to update connection '$connection_name'"
-            fi
+            [[ -n "$connection_name" ]] || continue
+            log_msg "🔧 Updating connection '$connection_name' DHCP hostname to '$desired_hostname'"
+            $SUDO nmcli connection modify "$connection_name" \
+                connection.dhcp-hostname "$desired_hostname" \
+                ipv4.dhcp-hostname "$desired_hostname" \
+                ipv4.dhcp-send-hostname yes \
+                ipv6.dhcp-hostname "$desired_hostname" \
+                ipv6.dhcp-send-hostname yes 2>/dev/null && \
+                log_msg "✅ Updated connection '$connection_name'" || \
+                log_msg "⚠️ Failed to update connection '$connection_name'"
         done <<< "$existing_connections"
     fi
     
-    # Method 2: Create interface-specific dhclient config
     configure_dhcp_hostname "$desired_hostname" "$interface"
-    
     log_msg "✅ Interface $interface configured to send DHCP hostname: $desired_hostname"
     return 0
 }
 
 setup_system_hostname() {
     local system_hostname="${1:-CNXNMist-Dashboard}"
-    
     log_msg "🏠 Setting up system hostname (one-time): $system_hostname"
-    
-    # Method 1: Set system hostname via hostnamectl
     if command -v hostnamectl >/dev/null 2>&1; then
-        if $SUDO hostnamectl set-hostname "$system_hostname" 2>/dev/null; then
-            log_msg "✅ System hostname set via hostnamectl: $system_hostname"
-        else
-            log_msg "❌ Failed to set hostname via hostnamectl"
-        fi
+        $SUDO hostnamectl set-hostname "$system_hostname" 2>/dev/null && \
+        log_msg "✅ System hostname set via hostnamectl: $system_hostname" || \
+        log_msg "❌ Failed to set hostname via hostnamectl"
     fi
-    
-    # Method 2: Update /etc/hostname
-    if echo "$system_hostname" | $SUDO tee /etc/hostname >/dev/null 2>&1; then
-        log_msg "✅ Updated /etc/hostname: $system_hostname"
-    else
-        log_msg "❌ Failed to update /etc/hostname"
-    fi
-    
-    # Method 3: Fix /etc/hosts properly
+    echo "$system_hostname" | $SUDO tee /etc/hostname >/dev/null 2>&1 && log_msg "✅ Updated /etc/hostname: $system_hostname" || log_msg "❌ Failed to update /etc/hostname"
     $SUDO cp /etc/hosts /etc/hosts.backup.$(date +%s) 2>/dev/null || true
-    
-    # Remove old 127.0.1.1 entries and add new one
     $SUDO sed -i '/^127\.0\.1\.1/d' /etc/hosts 2>/dev/null || true
     echo "127.0.1.1    $system_hostname" | $SUDO tee -a /etc/hosts >/dev/null
-    
-    log_msg "✅ Updated /etc/hosts with system hostname: $system_hostname"
-    
-    # Verify
     local actual_hostname=$(hostname)
-    if [[ "$actual_hostname" == "$system_hostname" ]]; then
-        log_msg "✅ System hostname verification successful: $actual_hostname"
-    else
-        log_msg "⚠️ System hostname verification: expected '$system_hostname', got '$actual_hostname'"
-    fi
-    
+    [[ "$actual_hostname" == "$system_hostname" ]] && log_msg "✅ System hostname verification successful: $actual_hostname" || log_msg "⚠️ System hostname verification: expected '$system_hostname', got '$actual_hostname'"
     return 0
 }
 
 # =============================================================================
-# 2. Enhanced DHCP Client Configuration
+# DHCP Client Configuration
 # =============================================================================
 
 configure_dhcp_hostname() {
     local hostname="$1"
     local interface="$2"
-    
     log_msg "🌐 Configuring DHCP to send hostname: $hostname for $interface"
-    
-    # Create dhclient configuration for this interface
     local dhclient_conf="/etc/dhcp/dhclient-${interface}.conf"
-    
     $SUDO mkdir -p /etc/dhcp
-    
     cat <<EOF | $SUDO tee "$dhclient_conf" >/dev/null
 # DHCP client configuration for $interface
 # Generated by Wi-Fi Dashboard
-
-# Send hostname in DHCP requests
 send host-name "$hostname";
-
-# Request hostname from server
 request subnet-mask, broadcast-address, time-offset, routers,
         domain-name, domain-name-servers, domain-search, host-name,
         dhcp6.name-servers, dhcp6.domain-search, dhcp6.fqdn, dhcp6.sntp-servers,
         netbios-name-servers, netbios-scope, interface-mtu,
         rfc3442-classless-static-routes, ntp-servers;
-
-# Override any server-provided hostname
 supersede host-name "$hostname";
 EOF
-    
     log_msg "✅ Created DHCP client config: $dhclient_conf"
-    
-    # Also configure NetworkManager to use this dhclient config
     local nm_conf="/etc/NetworkManager/conf.d/dhcp-hostname-${interface}.conf"
-    
     cat <<EOF | $SUDO tee "$nm_conf" >/dev/null
 [connection-dhcp-${interface}]
 match-device=interface-name:${interface}
-
 [ipv4]
 dhcp-hostname=${hostname}
 dhcp-send-hostname=yes
-
 [ipv6]
 dhcp-hostname=${hostname}
 dhcp-send-hostname=yes
 EOF
-    
     log_msg "✅ Created NetworkManager DHCP config: $nm_conf"
-    
-    # Reload NetworkManager configuration
     $SUDO nmcli general reload || true
-    
     return 0
 }
 
 # =============================================================================
-# 3. MAC Address Verification and Logging
+# Identity & helpers
 # =============================================================================
 
 verify_device_identity() {
     local interface="$1"
     local expected_hostname="$2"
-    
     log_msg "🔍 Verifying device identity for $interface"
-    
-    # Get interface details
     local mac_addr=$(ip link show "$interface" 2>/dev/null | awk '/link\/ether/ {print $2}' || echo "unknown")
-    local ip_addr=$(ip -4 addr show "$interface" 2>/dev/null | awk '/inet / {print $2}' | head -1 || echo "none")
+    local ip_addr=$(ip -4 addr show "$interface" 2>/dev/null | awk '/inet / {print $2; exit}' || echo "none")
     local current_hostname=$(hostname)
-    
-    # Log all identity information
     log_msg "📊 Device Identity Report:"
     log_msg "   Interface: $interface"
     log_msg "   MAC Address: $mac_addr"
     log_msg "   IP Address: $ip_addr"
     log_msg "   Current Hostname: $current_hostname"
     log_msg "   Expected Hostname: $expected_hostname"
-    
-    # Check if we're connected and get BSSID info
-    local bssid=""
-    local ssid=""
-    
+    local bssid="" ssid=""
     if $SUDO nmcli device show "$interface" 2>/dev/null | grep -q "connected"; then
         bssid=$($SUDO nmcli -t -f active,bssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}' || echo "unknown")
         ssid=$($SUDO nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}' || echo "unknown")
-        
         log_msg "   Connected SSID: $ssid"
         log_msg "   Connected BSSID: $bssid"
     else
         log_msg "   Connection Status: Not connected"
     fi
-    
-    # Create identity file for debugging
     local identity_file="/home/pi/wifi_test_dashboard/identity_${interface}.json"
     cat > "$identity_file" << EOF
 {
-    "interface": "$interface",
-    "mac_address": "$mac_addr",
-    "ip_address": "$ip_addr",
-    "hostname": "$current_hostname",
-    "expected_hostname": "$expected_hostname",
-    "ssid": "$ssid",
-    "bssid": "$bssid",
-    "timestamp": "$(date -Iseconds)"
+  "interface": "$interface",
+  "mac_address": "$mac_addr",
+  "ip_address": "$ip_addr",
+  "hostname": "$current_hostname",
+  "expected_hostname": "$expected_hostname",
+  "ssid": "$ssid",
+  "bssid": "$bssid",
+  "timestamp": "$(date -Iseconds)"
 }
 EOF
-    
     log_msg "✅ Identity information saved to: $identity_file"
-    
     return 0
 }
 
-# =============================================================================
-# 4. Connection Setup with Proper Hostname Assignment
-# =============================================================================
-
+# Connection with explicit hostname
 connect_with_hostname() {
-    local ssid="$1"
-    local password="$2"
-    local interface="$3"
-    local desired_hostname="$4"
-    
+    local ssid="$1" password="$2" interface="$3" desired_hostname="$4"
     log_msg "🔗 Connecting $interface to '$ssid' with hostname '$desired_hostname'"
-    
-    # Step 1: Set hostname BEFORE connection
     set_device_hostname "$desired_hostname" "$interface"
-    
-    # Step 2: Configure DHCP to send our hostname
     configure_dhcp_hostname "$desired_hostname" "$interface"
-    
-    # Step 3: Ensure clean connection state
     $SUDO nmcli device disconnect "$interface" 2>/dev/null || true
     sleep 2
-    
-    # Step 4: Connect with explicit hostname setting
     local connection_name="${desired_hostname}-wifi-$$"
-    
     if $SUDO nmcli connection add \
-        type wifi \
-        con-name "$connection_name" \
-        ifname "$interface" \
-        ssid "$ssid" \
-        wifi-sec.key-mgmt wpa-psk \
-        wifi-sec.psk "$password" \
+        type wifi con-name "$connection_name" ifname "$interface" ssid "$ssid" \
+        wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" \
         connection.dhcp-hostname "$desired_hostname" \
-        ipv4.dhcp-hostname "$desired_hostname" \
-        ipv4.dhcp-send-hostname yes \
-        ipv6.dhcp-hostname "$desired_hostname" \
-        ipv6.dhcp-send-hostname yes \
+        ipv4.dhcp-hostname "$desired_hostname" ipv4.dhcp-send-hostname yes \
+        ipv6.dhcp-hostname "$desired_hostname" ipv6.dhcp-send-hostname yes \
         connection.autoconnect no 2>/dev/null; then
-        
         log_msg "✅ Created connection profile with hostname: $desired_hostname"
-        
-        # Activate the connection
-        if $SUDO nmcli connection up "$connection_name" 2>/dev/null; then
+        if $SUDO nmcli --wait 45 connection up "$connection_name" 2>/dev/null; then
             log_msg "✅ Connection activated successfully"
-            
-            # Wait for DHCP and verify identity
             sleep 10
             verify_device_identity "$interface" "$desired_hostname"
-            
-            # Clean up connection profile (optional - or keep for reuse)
             # $SUDO nmcli connection delete "$connection_name" 2>/dev/null || true
-            
             return 0
         else
             log_msg "❌ Failed to activate connection"
@@ -391,7 +278,7 @@ connect_with_hostname() {
     fi
 }
 
-# Load persistent stats
+# Persistent stats
 load_stats() {
   if [[ -f "$STATS_FILE" ]]; then
     local stats_content
@@ -404,29 +291,46 @@ load_stats() {
   fi
   log_msg "📊 Loaded stats: Down=${TOTAL_DOWN}B, Up=${TOTAL_UP}B"
 }
-
 save_stats() {
   echo "{\"download\": $TOTAL_DOWN, \"upload\": $TOTAL_UP, \"timestamp\": $(date +%s)}" > "$STATS_FILE"
 }
 
-# --- Settings ---
+# Debounced saver (avoid excessive writes mid-cycle)
+LAST_SAVE_TS=0
+maybe_save_stats() {
+  local now
+  now=$(date +%s)
+  if (( LAST_SAVE_TS == 0 || (now - LAST_SAVE_TS) >= 5 )); then
+    save_stats
+    LAST_SAVE_TS=$now
+  fi
+}
+
+# --- Settings (FINALIZE INTERFACE BEFORE STATS FILE) ---
 [[ -f "$SETTINGS" ]] && source "$SETTINGS" || true
+DEMO_MODE="${DEMO_MODE:-true}"
+OPPORTUNISTIC_ROAMING_INTERVAL="${OPPORTUNISTIC_ROAMING_INTERVAL:-180}"
+LAST_ROAM_TIME="${LAST_ROAM_TIME:-0}"  # Initialize roaming timer
 INTERFACE="${WIFI_GOOD_INTERFACE:-$INTERFACE}"
 REFRESH_INTERVAL="${WIFI_GOOD_REFRESH_INTERVAL:-60}"
 CONNECTION_TIMEOUT="${WIFI_CONNECTION_TIMEOUT:-30}"
 MAX_RETRIES="${WIFI_MAX_RETRY_ATTEMPTS:-3}"
 
-# Roaming config (AGGRESSIVE FOR DEMO)
+# Roaming config
 ROAMING_ENABLED="${WIFI_ROAMING_ENABLED:-true}"
-ROAMING_INTERVAL="${WIFI_ROAMING_INTERVAL:-60}"  # Roam every 60 seconds for active demo
-ROAMING_SCAN_INTERVAL="${WIFI_ROAMING_SCAN_INTERVAL:-10}"  # Scan more frequently
+ROAMING_INTERVAL="${WIFI_ROAMING_INTERVAL:-60}"
+ROAMING_SCAN_INTERVAL="${WIFI_ROAMING_SCAN_INTERVAL:-10}"
 MIN_SIGNAL_THRESHOLD="${WIFI_MIN_SIGNAL_THRESHOLD:--75}"
-ROAMING_SIGNAL_DIFF="${WIFI_ROAMING_SIGNAL_DIFF:-5}"  # Reduced for more roaming
+ROAMING_SIGNAL_DIFF="${WIFI_ROAMING_SIGNAL_DIFF:-5}"
 WIFI_BAND_PREFERENCE="${WIFI_BAND_PREFERENCE:-both}"
 
 # Traffic config
 TRAFFIC_INTENSITY="${WLAN0_TRAFFIC_INTENSITY:-medium}"
 ENABLE_INTEGRATED_TRAFFIC="${WIFI_GOOD_INTEGRATED_TRAFFIC:-true}"
+
+# Ensure stats dir and compute STATS_FILE based on the final INTERFACE
+mkdir -p "$DASHBOARD_DIR/stats"
+STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE}.json"
 
 # Intensity presets
 case "$TRAFFIC_INTENSITY" in
@@ -451,68 +355,36 @@ LAST_SCAN_TIME=0
 SSID=""
 PASSWORD=""
 
-# Load persistent stats
+# Load persistent stats (now that STATS_FILE is finalized)
 load_stats
+trap 'save_stats' EXIT
 
 # --- Safe getters ---
-nm_state() {
-  $SUDO nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}' || echo ""
-}
-current_ip() {
-  ip -o -4 addr show dev "$INTERFACE" 2>/dev/null | awk '{print $4}' | head -n1
-}
-current_ssid() {
-  $SUDO nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}'
-}
+nm_state() { $SUDO nmcli -t -f GENERAL.STATE device show "$INTERFACE" 2>/dev/null | cut -d: -f2 | awk '{print $1}' || echo ""; }
+current_ip() { ip -o -4 addr show dev "$INTERFACE" 2>/dev/null | awk '{print $4}' | head -n1; }
+current_ssid() { $SUDO nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}'; }
 
 # --- Config ---
 read_wifi_config() {
-  if [[ ! -f "$CONFIG_FILE" ]]; then 
-    log_msg "Config file not found: $CONFIG_FILE"; return 1; 
-  fi
-  
+  if [[ ! -f "$CONFIG_FILE" ]]; then log_msg "Config file not found: $CONFIG_FILE"; return 1; fi
   mapfile -t lines < "$CONFIG_FILE"
-  if [[ ${#lines[@]} -lt 2 ]]; then 
-    log_msg "Config incomplete (need SSID + password)"; return 1; 
-  fi
-  
-  local temp_ssid="${lines[0]}"
-  local temp_password="${lines[1]}"
-  
-  temp_ssid=$(echo "$temp_ssid" | xargs)
-  temp_password=$(echo "$temp_password" | xargs)
-  
-  if [[ -z "$temp_ssid" || -z "$temp_password" ]]; then 
-    log_msg "SSID or password empty after parsing"; return 1; 
-  fi
-  
-  SSID="$temp_ssid"
-  PASSWORD="$temp_password"
-  export SSID PASSWORD
-  
+  if [[ ${#lines[@]} -lt 2 ]]; then log_msg "Config incomplete (need SSID + password)"; return 1; fi
+  local temp_ssid="${lines[0]}" temp_password="${lines[1]}"
+  temp_ssid=$(echo "$temp_ssid" | xargs); temp_password=$(echo "$temp_password" | xargs)
+  if [[ -z "$temp_ssid" || -z "$temp_password" ]]; then log_msg "SSID or password empty after parsing"; return 1; fi
+  SSID="$temp_ssid"; PASSWORD="$temp_password"; export SSID PASSWORD
   log_msg "Wi-Fi config loaded (SSID: '$SSID')"
   return 0
 }
 
 # --- Interface mgmt ---
 check_wifi_interface() {
-  if ! ip link show "$INTERFACE" >/dev/null 2>&1; then 
-    log_msg "Interface $INTERFACE not found"; return 1; 
-  fi
-  
+  if ! ip link show "$INTERFACE" >/dev/null 2>&1; then log_msg "Interface $INTERFACE not found"; return 1; fi
   log_msg "Ensuring $INTERFACE is up and managed..."
-  $SUDO ip link set "$INTERFACE" up || true
-  sleep 2
-  
-  $SUDO nmcli device set "$INTERFACE" managed yes || true
-  sleep 2
-  
-  log_msg "Forcing Wi-Fi rescan..."
-  $SUDO nmcli device wifi rescan ifname "$INTERFACE" || true
-  sleep 3
-  
-  local st; st="$(nm_state)"; 
-  log_msg "Interface $INTERFACE state: ${st:-unknown}"
+  $SUDO ip link set "$INTERFACE" up || true; sleep 2
+  $SUDO nmcli device set "$INTERFACE" managed yes || true; sleep 2
+  log_msg "Forcing Wi-Fi rescan..."; $SUDO nmcli device wifi rescan ifname "$INTERFACE" || true; sleep 3
+  local st; st="$(nm_state)"; log_msg "Interface $INTERFACE state: ${st:-unknown}"
   return 0
 }
 
@@ -522,117 +394,65 @@ get_current_bssid() {
   [[ "$b" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] && echo "$b" || echo ""
 }
 
-# FIXED: Enhanced BSSID discovery
+# BSSID discovery
 discover_bssids_for_ssid() {
-  local target_ssid="$1" 
-  local now; now=$(date +%s)
-  
-  if (( now - LAST_SCAN_TIME < ROAMING_SCAN_INTERVAL )); then 
-    return 0; 
-  fi
-  
-  if [[ -z "$target_ssid" ]]; then
-    log_msg "❌ discover_bssids_for_ssid called with empty SSID"
-    return 1
-  fi
-  
+  local target_ssid="$1" now; now=$(date +%s)
+  (( now - LAST_SCAN_TIME < ROAMING_SCAN_INTERVAL )) && return 0
+  [[ -z "$target_ssid" ]] && { log_msg "❌ discover_bssids_for_ssid called with empty SSID"; return 1; }
   log_msg "🔍 Scanning for BSSIDs broadcasting SSID: '$target_ssid'"
-
   DISCOVERED_BSSIDS=(); BSSID_SIGNALS=()
-
-  log_msg "🔄 Forcing fresh Wi-Fi scan..."
-  $SUDO nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1 || true
-  sleep 5
-
+  log_msg "🔄 Forcing fresh Wi-Fi scan..."; $SUDO nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1 || true; sleep 5
   log_msg "📋 Listing available networks..."
-  local scan_output
-  scan_output=$($SUDO nmcli -t -f BSSID,SSID,SIGNAL device wifi list ifname "$INTERFACE" 2>/dev/null || echo "")
-  
-  if [[ -z "$scan_output" ]]; then
-    log_msg "❌ nmcli wifi list returned no results"
-    return 1
-  fi
-
+  local scan_output; scan_output=$($SUDO nmcli -t -f BSSID,SSID,SIGNAL device wifi list ifname "$INTERFACE" 2>/dev/null || echo "")
+  [[ -z "$scan_output" ]] && { log_msg "❌ nmcli wifi list returned no results"; return 1; }
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
-    
     if [[ "$line" =~ ^([0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}\\:[0-9A-Fa-f]{2}):([^:]*):([0-9]+)$ ]]; then
-      local bssid_escaped="${BASH_REMATCH[1]}"
-      local ssid="${BASH_REMATCH[2]}"
-      local signal="${BASH_REMATCH[3]}"
-      
-      local bssid="${bssid_escaped//\\:/:}"
-      [[ -n "$ssid" ]] || continue
-      
+      local bssid_escaped="${BASH_REMATCH[1]}" ssid="${BASH_REMATCH[2]}" signal="${BASH_REMATCH[3]}"
+      local bssid="${bssid_escaped//\\:/:}"; [[ -n "$ssid" ]] || continue
       if [[ "$ssid" == "$target_ssid" ]]; then
         local signal_dbm=$(( signal / 2 - 100 ))
         if (( signal_dbm >= MIN_SIGNAL_THRESHOLD )); then
-          DISCOVERED_BSSIDS["$bssid"]="$ssid"
-          BSSID_SIGNALS["$bssid"]="$signal_dbm"
+          DISCOVERED_BSSIDS["$bssid"]="$ssid"; BSSID_SIGNALS["$bssid"]="$signal_dbm"
           log_msg "🎯 Found matching BSSID: $bssid (Signal: ${signal_dbm} dBm, ${signal}%)"
         fi
       fi
     fi
   done <<< "$scan_output"
-
   LAST_SCAN_TIME="$now"
   local count=${#DISCOVERED_BSSIDS[@]}
-
   if (( count == 0 )); then
-    log_msg "❌ No BSSIDs found for SSID: '$target_ssid'"
-    return 1
+    log_msg "❌ No BSSIDs found for SSID: '$target_ssid'"; return 1
   else
     log_msg "✅ Found $count BSSID(s) for '$target_ssid'"
-    for b in "${!DISCOVERED_BSSIDS[@]}"; do
-      log_msg "   Available: $b (${BSSID_SIGNALS[$b]} dBm)"
-    done
+    for b in "${!DISCOVERED_BSSIDS[@]}"; do log_msg "   Available: $b (${BSSID_SIGNALS[$b]} dBm)"; done
   fi
   return 0
 }
 
-# Remove existing NM connections for this SSID
 prune_same_ssid_profiles() {
   local ssid="$1"
   $SUDO nmcli -t -f NAME,TYPE con show 2>/dev/null \
     | awk -F: '$2=="wifi"{print $1}' \
     | while read -r c; do
-        local cs
-        cs="$($SUDO nmcli -t -f 802-11-wireless.ssid con show "$c" 2>/dev/null | cut -d: -f2 || true)"
+        local cs; cs="$($SUDO nmcli -t -f 802-11-wireless.ssid con show "$c" 2>/dev/null | cut -d: -f2 || true)"
         [[ "$cs" == "$ssid" ]] && $SUDO nmcli con delete "$c" 2>/dev/null || true
       done
 }
 
-# FIXED: Enhanced BSSID connection with better verification
 connect_locked_bssid() {
-  local bssid="$1" 
-  local ssid="$2" 
-  local psk="$3"
-
-  if [[ -z "$bssid" || -z "$ssid" || -z "$psk" ]]; then
-    log_msg "❌ connect_locked_bssid: missing parameter(s)"
-    return 1
-  fi
-
+  local bssid="$1" ssid="$2" psk="$3"
+  [[ -z "$bssid" || -z "$ssid" || -z "$psk" ]] && { log_msg "❌ connect_locked_bssid: missing parameter(s)"; return 1; }
   log_msg "🔗 Attempting BSSID-locked connection to $bssid (SSID: '$ssid')"
+  prune_same_ssid_profiles "$ssid"; $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true; sleep 3
 
-  # Clean slate
-  prune_same_ssid_profiles "$ssid"
-  $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
-  sleep 3
-
-  # First try: Direct nmcli with BSSID
   local OUT
   if OUT="$($SUDO nmcli --wait 45 device wifi connect "$ssid" password "$psk" ifname "$INTERFACE" bssid "$bssid" 2>&1)"; then
     log_msg "✅ nmcli BSSID connect reported success: ${OUT}"
     sleep 5
-    
-    # Verify the actual BSSID
-    local actual_bssid
-    actual_bssid="$(get_current_bssid)"
-    
+    local actual_bssid; actual_bssid="$(get_current_bssid)"
     if [[ "$actual_bssid" == "${bssid,,}" ]]; then
-      log_msg "✅ BSSID verification successful: connected to $actual_bssid"
-      return 0
+      log_msg "✅ BSSID verification successful: connected to $actual_bssid"; return 0
     else
       log_msg "❌ BSSID mismatch: connected to ${actual_bssid:-unknown}, expected ${bssid,,}"
     fi
@@ -640,56 +460,33 @@ connect_locked_bssid() {
     log_msg "❌ nmcli BSSID connect failed: ${OUT}"
   fi
 
-  # Second try: Create temporary profile with BSSID lock
   log_msg "🔄 Trying profile-based BSSID connection..."
   local profile_name="bssid-lock-$$"
-  
   if $SUDO nmcli connection add \
-      type wifi \
-      con-name "$profile_name" \
-      ifname "$INTERFACE" \
-      ssid "$ssid" \
-      802-11-wireless.bssid "$bssid" \
-      wifi-sec.key-mgmt wpa-psk \
-      wifi-sec.psk "$psk" \
-      ipv4.method auto \
-      ipv6.method ignore \
-      connection.autoconnect no >/dev/null 2>&1; then
-    
+      type wifi con-name "$profile_name" ifname "$INTERFACE" ssid "$ssid" \
+      802-11-wireless.bssid "$bssid" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$psk" \
+      ipv4.method auto ipv6.method ignore connection.autoconnect no >/dev/null 2>&1; then
     log_msg "✅ Created BSSID-locked profile"
-    
     if $SUDO nmcli --wait 45 connection up "$profile_name" >/dev/null 2>&1; then
       sleep 5
-      local actual_bssid
-      actual_bssid="$(get_current_bssid)"
-      
-      # Clean up profile immediately
+      local actual_bssid; actual_bssid="$(get_current_bssid)"
       $SUDO nmcli connection delete "$profile_name" 2>/dev/null || true
-      
       if [[ "$actual_bssid" == "${bssid,,}" ]]; then
-        log_msg "✅ Profile-based BSSID connection successful: $actual_bssid"
-        return 0
+        log_msg "✅ Profile-based BSSID connection successful: $actual_bssid"; return 0
       else
         log_msg "❌ Profile-based BSSID mismatch: ${actual_bssid:-unknown} vs ${bssid,,}"
       fi
     else
-      log_msg "❌ Profile activation failed"
-      $SUDO nmcli connection delete "$profile_name" 2>/dev/null || true
+      log_msg "❌ Profile activation failed"; $SUDO nmcli connection delete "$profile_name" 2>/dev/null || true
     fi
   else
     log_msg "❌ Failed to create BSSID-locked profile"
   fi
 
-  # Third try: iw dev connect (low-level)
   log_msg "🔄 Trying iw dev connect as last resort..."
-  $SUDO iw dev "$INTERFACE" disconnect >/dev/null 2>&1 || true
-  sleep 2
-  
+  $SUDO iw dev "$INTERFACE" disconnect >/dev/null 2>&1 || true; sleep 2
   if $SUDO iw dev "$INTERFACE" connect "$ssid" "$bssid" >/dev/null 2>&1; then
-    log_msg "✅ iw dev connect initiated"
-    sleep 5
-    
-    # For iw, we need to handle WPA separately
+    log_msg "✅ iw dev connect initiated"; sleep 5
     local wpa_conf="/tmp/wpa_roam_$$.conf"
     cat > "$wpa_conf" << EOF
 network={
@@ -699,109 +496,54 @@ network={
     scan_ssid=1
 }
 EOF
-    
     if $SUDO wpa_supplicant -i "$INTERFACE" -c "$wpa_conf" -B >/dev/null 2>&1; then
-      sleep 8
-      
-      # Request DHCP
-      $SUDO dhclient "$INTERFACE" >/dev/null 2>&1 || true
-      sleep 3
-      
-      local actual_bssid
-      actual_bssid="$(get_current_bssid)"
-      
-      # Clean up
-      rm -f "$wpa_conf"
-      pkill -f "wpa_supplicant.*$INTERFACE" || true
-      
+      sleep 8; $SUDO dhclient "$INTERFACE" >/dev/null 2>&1 || true; sleep 3
+      local actual_bssid; actual_bssid="$(get_current_bssid)"
+      rm -f "$wpa_conf"; pkill -f "wpa_supplicant.*$INTERFACE" || true
       if [[ "$actual_bssid" == "${bssid,,}" ]]; then
-        log_msg "✅ iw+wpa_supplicant BSSID connection successful: $actual_bssid"
-        return 0
+        log_msg "✅ iw+wpa_supplicant BSSID connection successful: $actual_bssid"; return 0
       else
         log_msg "❌ iw+wpa BSSID mismatch: ${actual_bssid:-unknown}"
       fi
     fi
-    
     rm -f "$wpa_conf"
   fi
 
-  log_msg "❌ All BSSID connection methods failed"
-  return 1
+  log_msg "❌ All BSSID connection methods failed"; return 1
 }
 
-## FIXED: Enhanced traffic generation with relaxed health checks
+# Traffic generation (now with debounced mid-cycle saves)
 generate_realistic_traffic() {
-  if [[ "$ENABLE_INTEGRATED_TRAFFIC" != "true" ]]; then return 0; fi
+  [[ "$ENABLE_INTEGRATED_TRAFFIC" != "true" ]] && return 0
 
-  # FIXED: More permissive health check
-  local st ip ss
-  st="$(nm_state)"
-  ip="$(current_ip)" 
-  ss="$(current_ssid)"
-  
-  # NEW: Accept multiple "good" states, not just "100"
-  # NetworkManager states: 10=unmanaged, 20=unavailable, 30=disconnected, 
-  # 50=prepare, 60=config, 70=need_auth, 80=ip_config, 90=ip_check, 100=activated
-  # FIXED: More permissive health check
+  local st ip ss; st="$(nm_state)"; ip="$(current_ip)"; ss="$(current_ssid)"
   if [[ "$st" != "100" && "$st" != "90" && "$st" != "80" ]]; then
-      log_msg "⚠️ Traffic suppressed: NetworkManager state not ready (state: $st)"
-      return 1
+      log_msg "⚠️ Traffic suppressed: NetworkManager state not ready (state: $st)"; return 1
   fi
-
-  if [[ -z "$ip" ]]; then
-      log_msg "⚠️ Traffic suppressed: No IP address assigned"
-      return 1
-  fi
-
-  # FIXED: Don't suppress traffic if SSID doesn't match exactly - could be roaming
+  if [[ -z "$ip" ]]; then log_msg "⚠️ Traffic suppressed: No IP address assigned"; return 1; fi
   if [[ -n "$ss" && -n "$SSID" && "$ss" != "$SSID" ]]; then
       log_msg "ℹ️ Note: Connected to '$ss', expected '$SSID' (may be roaming)"
-      # Don't return 1 here - continue with traffic generation
-  fi
-
-  # Check for IP - but be more flexible about SSID matching  
-  if [[ -z "$ip" ]]; then
-    log_msg "⚠️ Traffic suppressed: No IP address assigned"
-    return 1
-  fi
-
-  # FIXED: Don't suppress traffic if SSID doesn't match exactly - could be roaming
-  if [[ -n "$ss" && -n "$SSID" && "$ss" != "$SSID" ]]; then
-    log_msg "ℹ️ Note: Connected to '$ss', expected '$SSID' (may be roaming)"
-    # Don't return 1 here - continue with traffic generation
   fi
 
   log_msg "🚀 Starting realistic traffic generation (intensity: $TRAFFIC_INTENSITY, IP: $ip)"
 
   # Quick connectivity test before heavy traffic
   if ! timeout 10 ping -I "$INTERFACE" -c 2 -W 3 8.8.8.8 >/dev/null 2>&1; then
-    log_msg "❌ Basic connectivity failed; skipping heavy traffic"
-    return 1
+    log_msg "❌ Basic connectivity failed; skipping heavy traffic"; return 1
   fi
 
-  # Download traffic with better error handling
+  # Download traffic
   local url="${DOWNLOAD_URLS[$((RANDOM % ${#DOWNLOAD_URLS[@]}))]}"
   local tmp_file="/tmp/test_download_$$"
-  
   log_msg "📥 Downloading from: $(basename "$url")"
-  
-  # FIXED: Use curl with interface binding and better timeout handling
-  if timeout 120 curl \
-      --interface "$INTERFACE" \
-      --connect-timeout 15 \
-      --max-time 90 \
-      --retry 2 \
-      --retry-delay 5 \
-      --silent \
-      --location \
-      --fail \
-      --output "$tmp_file" \
-      "$url" 2>/dev/null; then
-    
+  if timeout 120 curl --interface "$INTERFACE" --connect-timeout 15 --max-time 90 \
+      --retry 2 --retry-delay 5 --silent --location --fail \
+      --output "$tmp_file" "$url" 2>/dev/null; then
     if [[ -f "$tmp_file" ]]; then
       local bytes
       bytes=$(stat -c%s "$tmp_file" 2>/dev/null || stat -f%z "$tmp_file" 2>/dev/null || echo 0)
       TOTAL_DOWN=$((TOTAL_DOWN + bytes))
+      maybe_save_stats    # <— debounced mid-cycle persist
       log_msg "✅ Downloaded $bytes bytes (Total: ${TOTAL_DOWN})"
       rm -f "$tmp_file"
     fi
@@ -810,142 +552,167 @@ generate_realistic_traffic() {
     rm -f "$tmp_file"
   fi
 
-  # Upload traffic with retry logic
+  # Upload traffic
   local upload_url="https://httpbin.org/post"
   local upload_size=102400  # 100KB
-  
   log_msg "📤 Uploading test data..."
   if timeout 60 dd if=/dev/zero bs=1024 count=100 2>/dev/null | \
-     curl --interface "$INTERFACE" \
-          --connect-timeout 10 \
-          --max-time 45 \
-          --retry 1 \
-          --silent \
-          --fail \
-          -X POST \
-          -o /dev/null \
-          "$upload_url" \
-          --data-binary @- 2>/dev/null; then
+     curl --interface "$INTERFACE" --connect-timeout 10 --max-time 45 \
+          --retry 1 --silent --fail -X POST -o /dev/null \
+          "$upload_url" --data-binary @- 2>/dev/null; then
     TOTAL_UP=$((TOTAL_UP + upload_size))
+    maybe_save_stats      # <— debounced mid-cycle persist
     log_msg "✅ Uploaded $upload_size bytes (Total: ${TOTAL_UP})"
   else
     log_msg "❌ Upload failed (may be network congestion)"
   fi
 
-  # Multiple ping targets for better reliability
-  local ping_success=0
-  local ping_total=${#PING_TARGETS[@]}
-  
+  # Multi-target ping summary (no byte accounting)
+  local ping_success=0 ping_total=${#PING_TARGETS[@]}
   for ping_target in "${PING_TARGETS[@]}"; do
     if timeout 30 ping -I "$INTERFACE" -c "$PING_COUNT" -i 0.5 "$ping_target" >/dev/null 2>&1; then
-      log_msg "✅ Ping successful: $ping_target"
-      ((ping_success++))
+      log_msg "✅ Ping successful: $ping_target"; ((ping_success++))
     else
       log_msg "⚠️ Ping failed: $ping_target"
     fi
   done
-  
   log_msg "📊 Ping results: $ping_success/$ping_total targets reachable"
 
-  # Save stats persistently
+  # Final persist for the cycle
   save_stats
-
   log_msg "✅ Traffic generation completed (Down: ${TOTAL_DOWN}B, Up: ${TOTAL_UP}B)"
   return 0
 }
 
-perform_roaming() {
-  local target_bssid="$1" 
-  local target_ssid="$2" 
-  local target_password="$3"
+select_roaming_target() {
+  local cur="$1"
+  local best="" 
+  local best_sig=-100
+  local current_sig="${BSSID_SIGNALS[$cur]:-$MIN_SIGNAL_THRESHOLD}"
+  local now=$(date +%s)
   
-  log_msg "🔄 Initiating roaming to BSSID: $target_bssid (SSID: $target_ssid)"
-
-  # Fresh scan to ensure target is still available
-  $SUDO nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1
-  sleep 3
-
-  # Verify target BSSID is visible
-  if ! $SUDO nmcli device wifi list ifname "$INTERFACE" | grep -qi "$target_bssid"; then
-    log_msg "❌ Target BSSID $target_bssid no longer visible"
-    return 1
-  fi
-
-  if connect_locked_bssid "$target_bssid" "$target_ssid" "$target_password"; then
-    log_msg "✅ Roaming successful!"
-    CURRENT_BSSID="$target_bssid"
-    LAST_ROAM_TIME="$(date +%s)"
+  log_msg "📊 Evaluating roaming from BSSID $cur (${current_sig} dBm)"
+  
+  # First, try to find a significantly better signal (normal roaming)
+  for b in "${!DISCOVERED_BSSIDS[@]}"; do
+    [[ "$b" == "$cur" ]] && continue
+    local s="${BSSID_SIGNALS[$b]}"
+    
+    # Only consider BSSIDs above minimum threshold
+    if (( s <= MIN_SIGNAL_THRESHOLD )); then
+      log_msg "   ⊗ Skipping $b (${s} dBm - below threshold)"
+      continue
+    fi
+    
+    # Check if significantly better
+    local signal_improvement=$((s - current_sig))
+    if (( signal_improvement >= ROAMING_SIGNAL_DIFF )); then
+      if (( s > best_sig )); then 
+        best_sig=$s
+        best="$b"
+        log_msg "   ✓ Better candidate: $b (${s} dBm, +${signal_improvement} dB improvement)"
+      fi
+    else
+      log_msg "   → Candidate $b (${s} dBm, +${signal_improvement} dB) - below +${ROAMING_SIGNAL_DIFF} dB threshold"
+    fi
+  done
+  
+  # If we found a significantly better signal, use it
+  if [[ -n "$best" ]]; then
+    log_msg "🎯 Selected signal-based roaming target: $best (${best_sig} dBm)"
+    echo "$best"
     return 0
+  fi
+  
+  # DEMO MODE: Opportunistic roaming when all signals are similar
+  if [[ "$DEMO_MODE" == "true" ]]; then
+    local time_since_last_roam=$((now - LAST_ROAM_TIME))
+    
+    if (( time_since_last_roam >= OPPORTUNISTIC_ROAMING_INTERVAL )); then
+      log_msg "🎪 Demo mode: Opportunistic roaming interval reached (${time_since_last_roam}s)"
+      
+      # Find any viable alternative BSSID (not current, above threshold)
+      local alternatives=()
+      for b in "${!DISCOVERED_BSSIDS[@]}"; do
+        [[ "$b" == "$cur" ]] && continue
+        local s="${BSSID_SIGNALS[$b]}"
+        if (( s > MIN_SIGNAL_THRESHOLD )); then
+          alternatives+=("$b")
+          log_msg "   • Alternative: $b (${s} dBm)"
+        fi
+      done
+      
+      if (( ${#alternatives[@]} > 0 )); then
+        # Pick a random alternative to demonstrate roaming
+        local idx=$((RANDOM % ${#alternatives[@]}))
+        best="${alternatives[$idx]}"
+        best_sig="${BSSID_SIGNALS[$best]}"
+        log_msg "🎯 Selected opportunistic roaming target: $best (${best_sig} dBm) - demo roaming"
+        LAST_ROAM_TIME=$now
+        echo "$best"
+        return 0
+      else
+        log_msg "⚠️ No viable alternative BSSIDs available for opportunistic roaming"
+      fi
+    else
+      local remaining=$((OPPORTUNISTIC_ROAMING_INTERVAL - time_since_last_roam))
+      log_msg "⏱️  Opportunistic roaming in ${remaining}s (no better signal available)"
+    fi
+  fi
+  
+  # No roaming target found
+  log_msg "📍 No suitable roaming target found; staying on $cur (${current_sig} dBm)"
+  echo ""
+}
+
+perform_roaming() {
+  local target_bssid="$1" target_ssid="$2" target_password="$3"
+  log_msg "🔄 Initiating roaming to BSSID: $target_bssid (SSID: $target_ssid)"
+  $SUDO nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1; sleep 3
+  if ! $SUDO nmcli device wifi list ifname "$INTERFACE" | grep -qi "$target_bssid"; then
+    log_msg "❌ Target BSSID $target_bssid no longer visible"; return 1
+  fi
+  if connect_locked_bssid "$target_bssid" "$target_ssid" "$target_password"; then
+    log_msg "✅ Roaming successful!"; CURRENT_BSSID="$target_bssid"; LAST_ROAM_TIME="$(date +%s)"; return 0
   else
-    log_msg "❌ Roaming failed"
-    return 1
+    log_msg "❌ Roaming failed"; return 1
   fi
 }
 
-# FIXED: Connection function with proper fallback
 connect_to_wifi_with_roaming() {
-  local local_ssid="$1" 
-  local local_password="$2"
-  
-  if [[ -z "$local_ssid" || -z "$local_password" ]]; then
-    log_msg "❌ connect_to_wifi_with_roaming called with empty parameters"
-    return 1
-  fi
-  
+  local local_ssid="$1" local_password="$2"
+  [[ -z "$local_ssid" || -z "$local_password" ]] && { log_msg "❌ connect_to_wifi_with_roaming called with empty parameters"; return 1; }
   log_msg "🔗 Connecting to Wi-Fi (roaming enabled=${ROAMING_ENABLED}) for SSID '$local_ssid'"
-
-  # Discover candidates
   if discover_bssids_for_ssid "$local_ssid"; then
-    # Try BSSID-locked connection to strongest signal
     local target_bssid="" best_signal=-100
     for b in "${!DISCOVERED_BSSIDS[@]}"; do
-      local s="${BSSID_SIGNALS[$b]}"
-      if [[ -n "$s" && "$s" -gt "$best_signal" ]]; then
-        best_signal="$s"
-        target_bssid="$b"
-      fi
+      local s="${BSSID_SIGNALS[$b]}"; [[ -n "$s" && "$s" -gt "$best_signal" ]] && best_signal="$s" && target_bssid="$b"
     done
-
     if [[ -n "$target_bssid" ]]; then
       log_msg "🎯 Attempting connection to strongest BSSID $target_bssid ($best_signal dBm)"
       if connect_locked_bssid "$target_bssid" "$local_ssid" "$local_password"; then
-        log_msg "✅ BSSID-locked connection successful"
-        return 0
+        log_msg "✅ BSSID-locked connection successful"; return 0
       else
         log_msg "⚠️ BSSID-locked connection failed, falling back to regular connect"
       fi
     fi
   fi
-
-  # Fallback to regular connection
   log_msg "🔄 Attempting fallback connection to SSID '$local_ssid'"
-  $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
-  sleep 2
-  
+  $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true; sleep 2
   local OUT
   if OUT="$($SUDO nmcli --wait 45 device wifi connect "${local_ssid}" password "${local_password}" ifname "$INTERFACE" 2>&1)"; then
     log_msg "✅ Fallback connection successful: ${OUT}"
   else
-    log_msg "❌ Fallback connection failed: ${OUT}"
-    return 1
+    log_msg "❌ Fallback connection failed: ${OUT}"; return 1
   fi
-
-  # Wait for IP
   log_msg "⏳ Waiting for IP address..."
   for i in {1..20}; do
-    local ip
-    ip="$(ip addr show "$INTERFACE" | awk '/inet /{print $2; exit}')"
-    if [[ -n "$ip" ]]; then
-      log_msg "✅ IP address acquired: $ip"
-      break
-    fi
+    local ip; ip="$(ip addr show "$INTERFACE" | awk '/inet /{print $2; exit}')"
+    [[ -n "$ip" ]] && { log_msg "✅ IP address acquired: $ip"; break; }
     sleep 2
   done
-
-  # Record current BSSID
   CURRENT_BSSID="$(get_current_bssid)"
   log_msg "✅ Successfully connected to '$local_ssid' (BSSID=${CURRENT_BSSID:-unknown})"
-  
   return 0
 }
 
@@ -958,24 +725,15 @@ should_perform_roaming() {
 }
 
 manage_roaming() {
-  if [[ "$ROAMING_ENABLED" != "true" ]]; then
-    return 0
-  fi
-
-  # Always keep candidate list fresh
+  [[ "$ROAMING_ENABLED" != "true" ]] && return 0
   discover_bssids_for_ssid "$SSID" || return 0
-
   if should_perform_roaming; then
     log_msg "⏰ Roaming interval reached, evaluating roaming opportunity..."
     CURRENT_BSSID="$(get_current_bssid)"
-
-    local target
-    target="$(select_roaming_target "$CURRENT_BSSID")"
+    local target; target="$(select_roaming_target "$CURRENT_BSSID")"
     if [[ -n "$target" ]]; then
-      local target_signal="${BSSID_SIGNALS[$target]}"
-      local current_signal="${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown}"
+      local target_signal="${BSSID_SIGNALS[$target]}" current_signal="${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown}"
       log_msg "🔄 Roaming candidate: $target (${target_signal}dBm) vs current $CURRENT_BSSID (${current_signal}dBm)"
-      
       if perform_roaming "$target" "$SSID" "$PASSWORD"; then
         log_msg "✅ Roaming completed successfully"
       else
@@ -988,169 +746,94 @@ manage_roaming() {
   fi
 }
 
-test_basic_connectivity() {
-  log_msg "🧪 Testing connectivity on $INTERFACE..."
-  local success_count=0
-
-  # DNS test
-  if getent hosts google.com >/dev/null 2>&1; then
-    log_msg "✅ DNS resolution OK"
-    ((success_count++))
-  fi
-
-  # HTTPS test
-  if timeout 15 curl --interface "$INTERFACE" --max-time 10 -fsSL -o /dev/null "https://www.google.com" 2>/dev/null; then
-    log_msg "✅ HTTPS connectivity test passed"
-    ((success_count++))
-  fi
-
-  # Ping test
-  if timeout 10 ping -I "$INTERFACE" -c 3 -W 2 8.8.8.8 >/dev/null 2>&1; then
-    log_msg "✅ Ping connectivity test passed"
-    ((success_count++))
-  fi
-
-  log_msg "📊 Connectivity: $success_count/3 tests passed"
-  return $([[ $success_count -gt 0 ]] && echo 0 || echo 1)
-}
-
-# FIXED: More permissive connection health assessment
+# Heuristic for connection health
 assess_connection_health() {
-  local st ip ss
-  st="$(nm_state)"
-  ip="$(current_ip)"
-  ss="$(current_ssid)"
-  
-  # Accept states 80, 90, 100 as "healthy enough"
+  local st ip ss; st="$(nm_state)"; ip="$(current_ip)"; ss="$(current_ssid)"
   if [[ "$st" == "100" || "$st" == "90" || "$st" == "80" ]] && [[ -n "$ip" ]]; then
-    # Connected with IP - this is healthy
     if [[ -n "$ss" && -n "$SSID" ]]; then
       if [[ "$ss" == "$SSID" ]]; then
-        log_msg "✅ Connection healthy: SSID='$ss', IP=$ip, state=$st"
-        return 0
+        log_msg "✅ Connection healthy: SSID='$ss', IP=$ip, state=$st"; return 0
       else
-        log_msg "ℹ️ Connection active but SSID mismatch: current='$ss', expected='$SSID' (may be roaming)"
-        return 0  # Still consider healthy for traffic generation
+        log_msg "ℹ️ Connection active but SSID mismatch: current='$ss', expected='$SSID' (may be roaming)"; return 0
       fi
     else
-      log_msg "✅ Connection active: IP=$ip, state=$st"
-      return 0
+      log_msg "✅ Connection active: IP=$ip, state=$st"; return 0
     fi
   else
-    log_msg "⚠️ Connection unhealthy: state=${st:-?}, IP=${ip:-none}, SSID=${ss:-none}"
-    return 1
+    log_msg "⚠️ Connection unhealthy: state=${st:-?}, IP=${ip:-none}, SSID=${ss:-none}"; return 1
   fi
 }
 
-# FIXED: Main loop with enhanced error handling and proper identity management
+# Main loop
 main_loop() {
     log_msg "🚀 Starting enhanced good client with persistent throughput tracking"
-    
-    # Enhanced setup with proper identity management
     enhanced_good_client_setup
-    
     local last_cfg=0 last_traffic=0
-    
     while true; do
         local now=$(date +%s)
-        
         # Re-read config periodically
         if (( now - last_cfg > 600 )); then
-            if read_wifi_config; then
-                log_msg "✅ Config refreshed (SSID: '$SSID')"
-                last_cfg=$now
-            else
-                log_msg "⚠️ Config read failed, using previous values (SSID: '${SSID:-unset}')"
-            fi
+            if read_wifi_config; then log_msg "✅ Config refreshed (SSID: '$SSID')"; last_cfg=$now
+            else log_msg "⚠️ Config read failed, using previous values (SSID: '${SSID:-unset}')"; fi
         fi
-        
         # Validate config
         if [[ -z "$SSID" || -z "$PASSWORD" ]]; then
             log_msg "❌ No valid SSID/password configuration, retrying in $REFRESH_INTERVAL seconds"
-            sleep "$REFRESH_INTERVAL"
-            continue
+            sleep "$REFRESH_INTERVAL"; continue
         fi
-        
         # Check interface
-        if ! check_wifi_interface; then 
-            log_msg "❌ Interface check failed, retrying..."
-            sleep "$REFRESH_INTERVAL"; 
-            continue; 
+        if ! check_wifi_interface; then
+            log_msg "❌ Interface check failed, retrying..."; sleep "$REFRESH_INTERVAL"; continue
         fi
-
-        # Check connection health using new assessment
+        # Health → roam → traffic
         if assess_connection_health; then
-            # Connection is healthy, continue with normal operations
             manage_roaming
-            if (( now - last_traffic > 30 )); then 
+            if (( now - last_traffic > 30 )); then
                 generate_realistic_traffic && last_traffic=$now
             fi
         else
-            # Connection needs attention
             if [[ -n "$SSID" && -n "$PASSWORD" ]]; then
                 log_msg "🔄 Connection needs attention, attempting to reconnect"
                 if connect_to_wifi_with_roaming "$SSID" "$PASSWORD"; then
-                    log_msg "✅ Wi-Fi connection reestablished"
-                    sleep 5
+                    log_msg "✅ Wi-Fi connection reestablished"; sleep 5
                 else
                     log_msg "❌ Reconnect failed; will retry in $REFRESH_INTERVAL seconds"
-                    sleep "$REFRESH_INTERVAL"
-                    continue
+                    sleep "$REFRESH_INTERVAL"; continue
                 fi
             else
                 log_msg "❌ Cannot reconnect: missing SSID or password"
-                sleep "$REFRESH_INTERVAL"
-                continue
+                sleep "$REFRESH_INTERVAL"; continue
             fi
         fi
-
-        # Status update with identity verification
         CURRENT_BSSID=$(get_current_bssid)
         if [[ -n "$CURRENT_BSSID" ]]; then
             log_msg "📍 Current: BSSID $CURRENT_BSSID (${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown} dBm) | Available BSSIDs: ${#DISCOVERED_BSSIDS[@]} | Stats: D=${TOTAL_DOWN}B U=${TOTAL_UP}B"
         fi
-
-        # Periodic identity verification (every 5 minutes)
-        if (( now % 300 == 0 )); then
-            verify_device_identity "$INTERFACE" "$HOSTNAME"
-        fi
-
+        if (( now % 300 == 0 )); then verify_device_identity "$INTERFACE" "$HOSTNAME"; fi
         log_msg "✅ Good client operating normally"
         sleep "$REFRESH_INTERVAL"
     done
 }
 
-# Enhanced setup function with hostname locks
 enhanced_good_client_setup() {
     log_msg "🚀 Starting enhanced good client with PROPER identity management"
-    
-    # FIXED: Set up system hostname ONLY if not already set
     local current_system_hostname=$(hostname)
     if [[ "$current_system_hostname" == "localhost" ]] || [[ "$current_system_hostname" == "raspberrypi" ]] || [[ -z "$current_system_hostname" ]]; then
         setup_system_hostname "CNXNMist-Dashboard"
     else
         log_msg "🏠 System hostname already set: $current_system_hostname (not changing)"
     fi
-    
-    # Set DHCP hostname for THIS interface only (with lock protection)
     set_device_hostname "$HOSTNAME" "$INTERFACE"
-    
-    # Verify our identity
     verify_device_identity "$INTERFACE" "$HOSTNAME"
-    
     log_msg "Interface: $INTERFACE | DHCP Hostname: $HOSTNAME | System Hostname: $(hostname)"
     log_msg "Roaming: ${ROAMING_ENABLED} (interval ${ROAMING_INTERVAL}s; scan ${ROAMING_SCAN_INTERVAL}s; min ${MIN_SIGNAL_THRESHOLD}dBm)"
     log_msg "Persistent stats file: $STATS_FILE"
 }
 
-# Enhanced cleanup with lock release
 cleanup_and_exit() {
   log_msg "🧹 Cleaning up good client..."
   save_stats
-  
-  # RELEASE HOSTNAME LOCK
   release_hostname_lock "$INTERFACE"
-  
   $SUDO nmcli device disconnect "$INTERFACE" 2>/dev/null || true
   log_msg "✅ Stopped (final stats saved: Down=${TOTAL_DOWN}B, Up=${TOTAL_UP}B)"
   exit 0

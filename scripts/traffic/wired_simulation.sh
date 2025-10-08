@@ -9,7 +9,6 @@ LOG_FILE="/home/pi/wifi_test_dashboard/logs/wired.log"
 SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
 DASHBOARD_DIR="/home/pi/wifi_test_dashboard"
 mkdir -p "$DASHBOARD_DIR/stats"
-STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE:-eth0}.json"
 
 set +e  # Keep service alive on errors
 
@@ -43,6 +42,10 @@ mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 INTERFACE="${WIRED_INTERFACE:-$INTERFACE}"
 HOSTNAME="${WIRED_HOSTNAME:-$HOSTNAME}"
 REFRESH_INTERVAL="${WIRED_REFRESH_INTERVAL:-30}"
+# Ensure stats dir exists
+mkdir -p "$DASHBOARD_DIR/stats"
+# Recompute STATS_FILE based on the final INTERFACE
+STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE}.json"
 
 # IMPROVED: Aggressively claim DHCP hostname on startup
 claim_dhcp_hostname() {
@@ -220,17 +223,18 @@ generate_heavy_traffic() {
         dd if=/dev/zero of="$upload_data" bs=1024 count=100 2>/dev/null
         
         if timeout 60 curl --interface "$INTERFACE" \
-               --connect-timeout 10 \
-               --max-time 45 \
-               --silent \
-               -X POST \
-               -o /dev/null \
-               "https://httpbin.org/post" \
-               --data-binary "@$upload_data" 2>/dev/null; then
-            TOTAL_UP=$((TOTAL_UP + upload_size))
-            log_msg "✓ Upload completed: $upload_size bytes (Total Up: ${TOTAL_UP}B)"
-        else
-            log_msg "✗ Upload failed"
+                --connect-timeout 10 \
+                --max-time 45 \
+                --silent \
+                -X POST \
+                -o /dev/null \
+                "https://httpbin.org/post" \
+                --data-binary "@$upload_data" 2>/dev/null; then
+                TOTAL_UP=$((TOTAL_UP + upload_size))
+                save_stats     
+                log_msg "✓ Upload completed: $upload_size bytes (Total Up: ${TOTAL_UP}B)"
+            else
+                log_msg "✗ Upload failed"
         fi
         
         rm -f "$upload_data"
@@ -251,6 +255,7 @@ generate_heavy_traffic() {
         if [[ $dns_bytes -gt 0 ]]; then
             TOTAL_DOWN=$((TOTAL_DOWN + dns_bytes))
             TOTAL_UP=$((TOTAL_UP + dns_bytes))
+            save_stats
         fi
     } &
     

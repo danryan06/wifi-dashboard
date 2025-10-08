@@ -1,666 +1,149 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Wi-Fi Bad Client: repeated auth failures to generate association/auth logs
+set -uo pipefail
 
-# Wi-Fi Bad Client - ENHANCED with Hostname Locking & Real Auth Failures
-# Generates real authentication failures that will show up in Mist logs
+# --- Paths & defaults ---
+export PATH="$PATH:/usr/local/bin:/usr/sbin:/sbin:/home/pi/.local/bin"
+DASHBOARD_DIR="/home/pi/wifi_test_dashboard"
+LOG_DIR="$DASHBOARD_DIR/logs"
+LOG_FILE="$LOG_DIR/wifi-bad.log"
+CONFIG_FILE="$DASHBOARD_DIR/configs/ssid.conf"
+SETTINGS="$DASHBOARD_DIR/configs/settings.conf"
 
 INTERFACE="${INTERFACE:-wlan1}"
-HOSTNAME="CNXNMist-WiFiBad"
-LOG_FILE="/home/pi/wifi_test_dashboard/logs/wifi-bad.log"
-CONFIG_FILE="/home/pi/wifi_test_dashboard/configs/ssid.conf"
-SETTINGS="/home/pi/wifi_test_dashboard/configs/settings.conf"
-DASHBOARD_DIR="/home/pi/wifi_test_dashboard"
-mkdir -p "$DASHBOARD_DIR/stats"
-STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE:-wlan1}.json"
+HOSTNAME="${WIFI_BAD_HOSTNAME:-${HOSTNAME:-CNXNMist-WiFiBad}}"
+REFRESH_INTERVAL="${WIFI_BAD_REFRESH_INTERVAL:-45}"
 
-# Add after STATS_FILE definition, before the functions
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+mkdir -p "$DASHBOARD_DIR/stats" 2>/dev/null || true
 
-# Load persistent stats
-load_stats() {
-  if [[ -f "$STATS_FILE" ]]; then
-    local stats_content
-    stats_content=$(cat "$STATS_FILE" 2>/dev/null || echo '{"download": 0, "upload": 0}')
-    TOTAL_DOWN=$(echo "$stats_content" | jq -r '.download // 0' 2>/dev/null || echo 0)
-    TOTAL_UP=$(echo "$stats_content" | jq -r '.upload // 0' 2>/dev/null || echo 0)
-  else
-    TOTAL_DOWN=0
-    TOTAL_UP=0
-  fi
-  log_msg "📊 Loaded stats: Down=${TOTAL_DOWN}B, Up=${TOTAL_UP}B"
+# Privilege helper
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then SUDO="sudo"; else SUDO=""; fi
+
+log_msg() {
+  echo "[$(date '+%F %T')] WIFI-BAD: $1" | tee -a "$LOG_FILE"
 }
 
+# --- Hostname lock helpers (lightweight) ---
+LOCK_DIR="/var/run/wifi-dashboard"
+LOCK_FILE="$LOCK_DIR/hostname-${INTERFACE}.lock"
+acquire_hostname_lock() {
+  $SUDO mkdir -p "$LOCK_DIR"
+  echo "${INTERFACE}:${HOSTNAME}:$(date +%s):$$" | $SUDO tee "$LOCK_FILE" >/dev/null
+}
+release_hostname_lock() {
+  [[ -f "$LOCK_FILE" ]] && $SUDO rm -f "$LOCK_FILE" || true
+}
+
+# --- Persistent totals (bytes) ---
+TOTAL_DOWN=0
+TOTAL_UP=0
+
+load_stats() {
+  local fn="$STATS_FILE"
+  if [[ -f "$fn" ]]; then
+    local j; j=$(cat "$fn" 2>/dev/null || echo '{"download":0,"upload":0}')
+    TOTAL_DOWN=$(echo "$j" | jq -r '.download // 0' 2>/dev/null || echo 0)
+    TOTAL_UP=$(echo "$j" | jq -r '.upload // 0' 2>/dev/null || echo 0)
+  else
+    TOTAL_DOWN=0; TOTAL_UP=0
+  fi
+  log_msg "📊 Loaded stats: down=${TOTAL_DOWN}B up=${TOTAL_UP}B"
+}
 save_stats() {
   echo "{\"download\": $TOTAL_DOWN, \"upload\": $TOTAL_UP, \"timestamp\": $(date +%s)}" > "$STATS_FILE"
 }
-
-# HOSTNAME LOCK SYSTEM - NEW
-HOSTNAME_LOCK_DIR="/var/run/wifi-dashboard"
-HOSTNAME_LOCK_FILE="$HOSTNAME_LOCK_DIR/hostname-${INTERFACE}.lock"
-
-# Keep service alive on errors - don't exit on failures
-set +e
-
-# --- Privilege helper for nmcli ---
-if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  SUDO="sudo"
-else
-  SUDO=""
-fi
-
-log_msg() {
-    local msg="[$(date '+%F %T')] WIFI-BAD: $1"
-    echo "$msg" | tee -a "$LOG_FILE"
+LAST_SAVE_TS=0
+maybe_save_stats() {  # [UPDATED] debounced to limit writes
+  local now; now=$(date +%s)
+  if (( LAST_SAVE_TS == 0 || (now - LAST_SAVE_TS) >= 5 )); then
+    save_stats
+    LAST_SAVE_TS=$now
+  fi
 }
 
-# =============================================================================
-# HOSTNAME LOCK SYSTEM
-# =============================================================================
+# --- Read settings and finalize interface ---
+[[ -f "$SETTINGS" ]] && source "$SETTINGS" || true
+INTERFACE="${WIFI_BAD_INTERFACE:-$INTERFACE}"
+HOSTNAME="${WIFI_BAD_HOSTNAME:-$HOSTNAME}"
+REFRESH_INTERVAL="${WIFI_BAD_REFRESH_INTERVAL:-$REFRESH_INTERVAL}"
 
-acquire_hostname_lock() {
-    local interface="$1"
-    local desired_hostname="$2"
-    local max_wait=30
-    local wait_count=0
+# Recompute STATS_FILE once the interface is FINAL  # [UPDATED]
+STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE}.json"  # [UPDATED]
+load_stats
+trap 'save_stats; release_hostname_lock' EXIT
 
-    log_msg "🔒 Acquiring hostname lock for $interface -> $desired_hostname"
-
-    $SUDO mkdir -p "$HOSTNAME_LOCK_DIR"
-
-    while [[ -f "$HOSTNAME_LOCK_FILE" && $wait_count -lt $max_wait ]]; do
-        local existing_lock
-        existing_lock=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
-
-        if [[ "$existing_lock" == "${interface}:${desired_hostname}"* ]]; then
-            log_msg "✅ Lock already held by this service"
-            return 0
-        fi
-
-        log_msg "⏳ Waiting for hostname lock to clear: $existing_lock"
-        sleep 2
-        ((wait_count += 2))
-    done
-
-    echo "${interface}:${desired_hostname}:$(date +%s):$$" | $SUDO tee "$HOSTNAME_LOCK_FILE" >/dev/null
-
-    local lock_content
-    lock_content=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
-
-    if [[ "$lock_content" == "${interface}:${desired_hostname}:"* ]]; then
-        log_msg "✅ Hostname lock acquired successfully"
-        return 0
-    else
-        log_msg "❌ Failed to acquire hostname lock"
-        return 1
-    fi
-}
-
-release_hostname_lock() {
-    local interface="$1"
-
-    if [[ -f "$HOSTNAME_LOCK_FILE" ]]; then
-        local lock_content
-        lock_content=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
-
-        if [[ "$lock_content" == "${interface}:"* ]]; then
-            $SUDO rm -f "$HOSTNAME_LOCK_FILE"
-            log_msg "🔓 Released hostname lock for $interface"
-        fi
-    fi
-}
-
-# =============================================================================
-# Hostname / DHCP Identity
-# =============================================================================
-
-set_device_hostname() {
-    local desired_hostname="$1"
-    local interface="$2"
-
-    # Acquire lock to avoid fights with other services
-    if ! acquire_hostname_lock "$interface" "$desired_hostname"; then
-        log_msg "❌ Cannot set hostname - failed to acquire lock"
-        return 1
-    fi
-
-    log_msg "🏷️ Setting DHCP hostname to: $desired_hostname for interface $interface (NOT changing system hostname)"
-
-    local mac_addr
-    mac_addr=$(ip link show "$interface" 2>/dev/null | awk '/link\/ether/ {print $2}' || echo "unknown")
-    log_msg "📱 Interface $interface MAC address: $mac_addr"
-
-    # Configure all active connections on this interface
-    local existing_connections
-    existing_connections=$($SUDO nmcli -t -f NAME,DEVICE connection show --active | grep ":$interface$" | cut -d: -f1)
-
-    if [[ -n "$existing_connections" ]]; then
-        while read -r connection_name; do
-            if [[ -n "$connection_name" ]]; then
-                log_msg "🔧 Updating connection '$connection_name' DHCP hostname to '$desired_hostname'"
-                $SUDO nmcli connection modify "$connection_name" \
-                    connection.dhcp-hostname "$desired_hostname" \
-                    ipv4.dhcp-hostname "$desired_hostname" \
-                    ipv4.dhcp-send-hostname yes \
-                    ipv6.dhcp-hostname "$desired_hostname" \
-                    ipv6.dhcp-send-hostname yes 2>/dev/null && \
-                    log_msg "✅ Updated connection '$connection_name'" || \
-                    log_msg "⚠️ Failed to update connection '$connection_name'"
-            fi
-        done <<< "$existing_connections"
-    fi
-
-    # Create interface-specific dhclient / NM config
-    configure_dhcp_hostname "$desired_hostname" "$interface"
-
-    log_msg "✅ Interface $interface configured to send DHCP hostname: $desired_hostname"
-    return 0
-}
-
-setup_system_hostname() {
-    local system_hostname="${1:-CNXNMist-Dashboard}"
-
-    log_msg "🏠 Setting up system hostname (one-time): $system_hostname"
-
-    # Only set if not already customized
-    local current_hostname
-    current_hostname=$(hostname)
-    if [[ "$current_hostname" == "localhost" ]] || [[ "$current_hostname" == "raspberrypi" ]] || [[ -z "$current_hostname" ]]; then
-        if command -v hostnamectl >/dev/null 2>&1; then
-            $SUDO hostnamectl set-hostname "$system_hostname" 2>/dev/null && \
-                log_msg "✅ System hostname set: $system_hostname" || \
-                log_msg "❌ Failed to set hostname"
-        fi
-
-        echo "$system_hostname" | $SUDO tee /etc/hostname >/dev/null 2>&1 && \
-            log_msg "✅ Updated /etc/hostname" || \
-            log_msg "❌ Failed to update /etc/hostname"
-
-        $SUDO cp /etc/hosts /etc/hosts.backup.$(date +%s) 2>/dev/null || true
-        $SUDO sed -i '/^127\.0\.1\.1/d' /etc/hosts 2>/dev/null || true
-        echo "127.0.1.1    $system_hostname" | $SUDO tee -a /etc/hosts >/dev/null
-
-        log_msg "✅ System hostname setup completed: $system_hostname"
-    else
-        log_msg "🏠 System hostname already customized ($current_hostname), not changing"
-    fi
-
-    return 0
+# --- Utilities ---
+read_ssid() {
+  if [[ -f "$CONFIG_FILE" ]]; then
+    head -n1 "$CONFIG_FILE" | xargs
+  else
+    echo ""
+  fi
 }
 
 configure_dhcp_hostname() {
-    local hostname="$1"
-    local interface="$2"
-
-    log_msg "🌐 Configuring DHCP to send hostname: $hostname for $interface"
-
-    local dhclient_conf="/etc/dhcp/dhclient-${interface}.conf"
-    $SUDO mkdir -p /etc/dhcp
-    cat <<EOF | $SUDO tee "$dhclient_conf" >/dev/null
-# DHCP client configuration for $interface
-# Generated by Wi-Fi Dashboard
-
-send host-name "$hostname";
-request subnet-mask, broadcast-address, time-offset, routers,
-        domain-name, domain-name-servers, domain-search, host-name,
-        dhcp6.name-servers, dhcp6.domain-search, dhcp6.fqdn, dhcp6.sntp-servers,
-        netbios-name-servers, netbios-scope, interface-mtu,
-        rfc3442-classless-static-routes, ntp-servers;
-supersede host-name "$hostname";
+  local hn="$1" ifn="$2"
+  local dhc="/etc/dhcp/dhclient-${ifn}.conf"
+  $SUDO mkdir -p /etc/dhcp
+  cat <<EOF | $SUDO tee "$dhc" >/dev/null
+send host-name "$hn";
+supersede host-name "$hn";
 EOF
-    log_msg "✅ Created DHCP client config: $dhclient_conf"
-
-    local nm_conf="/etc/NetworkManager/conf.d/dhcp-hostname-${interface}.conf"
-    cat <<EOF | $SUDO tee "$nm_conf" >/dev/null
-[connection-dhcp-${interface}]
-match-device=interface-name:${interface}
-
+  local nm="/etc/NetworkManager/conf.d/dhcp-hostname-${ifn}.conf"
+  cat <<EOF | $SUDO tee "$nm" >/dev/null
+[connection-dhcp-${ifn}]
+match-device=interface-name:${ifn}
 [ipv4]
-dhcp-hostname=${hostname}
+dhcp-hostname=${hn}
 dhcp-send-hostname=yes
-
 [ipv6]
-dhcp-hostname=${hostname}
+dhcp-hostname=${hn}
 dhcp-send-hostname=yes
 EOF
-
-    log_msg "✅ Created NetworkManager DHCP config: $nm_conf"
-    $SUDO nmcli general reload || true
-
-    return 0
+  $SUDO nmcli general reload || true
 }
 
-verify_device_identity() {
-    local interface="$1"
-    local expected_hostname="$2"
+# --- Main bad-auth loop ---
+log_msg "🚀 Starting Wi-Fi bad client on $INTERFACE (hostname: $HOSTNAME)"
+acquire_hostname_lock
+configure_dhcp_hostname "$HOSTNAME" "$INTERFACE"
 
-    log_msg "🔍 Verifying device identity for $interface"
+while true; do
+  SSID="$(read_ssid)"
+  if [[ -z "$SSID" ]]; then
+    log_msg "⚠️ No SSID configured in $CONFIG_FILE; sleeping ${REFRESH_INTERVAL}s"
+    sleep "$REFRESH_INTERVAL"; continue
+  fi
 
-    local mac_addr ip_addr current_hostname
-    mac_addr=$(ip link show "$interface" 2>/dev/null | awk '/link\/ether/ {print $2}' || echo "unknown")
-    ip_addr=$(ip -4 addr show "$interface" 2>/dev/null | awk '/inet / {print $2}' | head -1 || echo "none")
-    current_hostname=$(hostname)
+  # Create a temporary bad password attempt to trigger auth failures
+  BAD_PSK="wrongpassword-$$-$(date +%s)"
+  CONN_NAME="wifi-bad-test-$$"
+  $SUDO nmcli connection delete "$CONN_NAME" >/dev/null 2>&1 || true
+  if $SUDO nmcli connection add \
+      type wifi con-name "$CONN_NAME" ifname "$INTERFACE" ssid "$SSID" \
+      wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$BAD_PSK" \
+      connection.autoconnect no >/dev/null 2>&1; then
+    log_msg "🔁 Trying bad auth to SSID '$SSID' (intentionally wrong PSK)"
+    $SUDO nmcli --wait 20 connection up "$CONN_NAME" >/dev/null 2>&1 && \
+      log_msg "⚠️ Unexpected success; network may be open or PSK ignored" || \
+      log_msg "✅ Expected failure recorded (auth/logs generated)"
+  else
+    log_msg "❌ Failed to create test connection profile"
+  fi
+  $SUDO nmcli connection delete "$CONN_NAME" >/dev/null 2>&1 || true
 
-    log_msg "📊 Device Identity Report:"
-    log_msg "   Interface: $interface"
-    log_msg "   MAC Address: $mac_addr"
-    log_msg "   IP Address: $ip_addr"
-    log_msg "   Current Hostname: $current_hostname"
-    log_msg "   Expected Hostname: $expected_hostname"
+  # (Optional) light traffic to keep interface visible (very small)
+  if timeout 5 ping -I "$INTERFACE" -c 2 1.1.1.1 >/dev/null 2>&1; then
+    # Count a tiny amount for ping overhead as down/up “noise”
+    TOTAL_DOWN=$((TOTAL_DOWN + 256))
+    TOTAL_UP=$((TOTAL_UP + 256))
+    maybe_save_stats   # [UPDATED]
+    log_msg "📶 Light probe traffic accounted (+256B each dir)"
+  fi
 
-    local bssid="" ssid=""
-    if $SUDO nmcli device show "$interface" 2>/dev/null | grep -q "connected"; then
-        bssid=$($SUDO nmcli -t -f active,bssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}' || echo "unknown")
-        ssid=$($SUDO nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}' || echo "unknown")
-        log_msg "   Connected SSID: $ssid"
-        log_msg "   Connected BSSID: $bssid"
-    else
-        log_msg "   Connection Status: Not connected"
-    fi
-
-    local identity_file="/home/pi/wifi_test_dashboard/identity_${interface}.json"
-    cat > "$identity_file" << EOF
-{
-    "interface": "$interface",
-    "mac_address": "$mac_addr",
-    "ip_address": "$ip_addr",
-    "hostname": "$current_hostname",
-    "expected_hostname": "$expected_hostname",
-    "ssid": "$ssid",
-    "bssid": "$bssid",
-    "timestamp": "$(date -Iseconds)"
-}
-EOF
-
-    log_msg "✅ Identity information saved to: $identity_file"
-    return 0
-}
-
-# =============================================================================
-# Connection / Scan / Failure Machinery
-# =============================================================================
-
-read_wifi_config() {
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        log_msg "✗ Config file not found: $CONFIG_FILE"
-        return 1
-    fi
-    local lines
-    mapfile -t lines < "$CONFIG_FILE"
-    if [[ ${#lines[@]} -lt 1 ]]; then
-        log_msg "✗ Config file incomplete (need at least SSID)"
-        return 1
-    fi
-    SSID="$(echo "${lines[0]}" | xargs)"
-    if [[ -z "$SSID" ]]; then
-        log_msg "✗ SSID is empty after trimming"
-        return 1
-    fi
-    log_msg "✓ Target SSID loaded: '$SSID'"
-    return 0
-}
-
-check_wifi_interface() {
-    if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
-        log_msg "✗ Wi-Fi interface $INTERFACE not found"
-        return 1
-    fi
-    log_msg "Ensuring $INTERFACE is up..."
-    $SUDO ip link set "$INTERFACE" up 2>/dev/null || true
-    sleep 2
-    log_msg "Setting $INTERFACE to managed mode..."
-    $SUDO nmcli device set "$INTERFACE" managed yes 2>/dev/null || true
-    sleep 3
-    local managed_state
-    managed_state=$($SUDO nmcli device show "$INTERFACE" 2>/dev/null | grep "GENERAL.STATE" | awk '{print $2}' || echo "unknown")
-    log_msg "Interface $INTERFACE state: $managed_state"
-    return 0
-}
-
-scan_for_ssid() {
-    local target_ssid="$1"
-    log_msg "🔍 Scanning for target SSID: '$target_ssid'"
-    log_msg "Triggering Wi-Fi rescan..."
-    $SUDO nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
-    sleep 5
-    local scan_results
-    scan_results=$($SUDO nmcli device wifi list ifname "$INTERFACE" 2>/dev/null || echo "")
-    if [[ -z "$scan_results" ]]; then
-        log_msg "✗ No scan results returned"
-        return 1
-    fi
-    local network_count
-    network_count=$(echo "$scan_results" | wc -l)
-    log_msg "📋 Scan found $network_count networks"
-    if echo "$scan_results" | grep -F "$target_ssid" >/dev/null; then
-        log_msg "✓ Target SSID '$target_ssid' is visible in scan results"
-        return 0
-    else
-        log_msg "✗ Target SSID '$target_ssid' not found in scan results"
-        log_msg "Available SSIDs:"
-        echo "$scan_results" | awk 'NR>1 {print $2}' | head -5 | while read -r found_ssid; do
-            [[ -n "$found_ssid" ]] && log_msg "  - '$found_ssid'"
-        done
-        return 1
-    fi
-}
-
-force_disconnect() {
-    log_msg "🔌 Ensuring $INTERFACE is disconnected and clean..."
-    $SUDO nmcli device disconnect "$INTERFACE" 2>/dev/null || true
-    pkill -f "wpa_supplicant.*$INTERFACE" 2>/dev/null || true
-    local temp_connections
-    temp_connections=$($SUDO nmcli -t -f NAME connection show 2>/dev/null | grep -E "^bad-client-|^wifi-bad-|^temp-bad-" || true)
-    if [[ -n "$temp_connections" ]]; then
-        echo "$temp_connections" | while read -r conn; do
-            [[ -n "$conn" ]] && $SUDO nmcli connection delete "$conn" 2>/dev/null || true
-        done
-        log_msg "🧹 Cleaned up temporary connection profiles"
-    fi
-    sleep 2
-}
-
-attempt_bad_connection() {
-    local ssid="$1"
-    local wrong_password="$2"
-    local connection_name="bad-client-$(date +%s)-$RANDOM"
-
-    log_msg "🔓 Attempting authentication with wrong password: '***${wrong_password: -3}' for SSID '$ssid'"
-
-    force_disconnect
-
-    # Method 1: Profile-based attempt
-    log_msg "📝 Creating connection profile with wrong credentials..."
-    local profile_created=false
-    if $SUDO nmcli connection add \
-        type wifi \
-        con-name "$connection_name" \
-        ifname "$INTERFACE" \
-        ssid "$ssid" \
-        wifi-sec.key-mgmt wpa-psk \
-        wifi-sec.psk "$wrong_password" \
-        ipv4.method manual \
-        ipv4.addresses "192.168.255.1/24" \
-        ipv6.method ignore \
-        connection.autoconnect no 2>/dev/null; then
-        profile_created=true
-        log_msg "✓ Created connection profile with wrong password"
-        log_msg "🔌 Attempting activation (expecting auth failure)..."
-        if timeout "${CONNECTION_TIMEOUT:-20}" $SUDO nmcli connection up "$connection_name" 2>&1; then
-            log_msg "🚨 UNEXPECTED: Connection succeeded with wrong password!"
-        else
-            log_msg "✓ Authentication failed as expected (profile method)"
-        fi
-        $SUDO nmcli connection delete "$connection_name" 2>/dev/null || true
-    else
-        log_msg "✗ Failed to create connection profile"
-    fi
-
-    # Method 2: Direct connect
-    if [[ "$profile_created" != "true" ]]; then
-        log_msg "🔄 Trying direct nmcli device wifi connect..."
-        local connect_output
-        if connect_output=$(timeout "${CONNECTION_TIMEOUT:-20}" $SUDO nmcli device wifi connect "$ssid" password "$wrong_password" ifname "$INTERFACE" 2>&1); then
-            log_msg "🚨 UNEXPECTED: Direct connect succeeded with wrong password!"
-            log_msg "Output: $connect_output"
-        else
-            log_msg "✓ Direct connect authentication failed as expected"
-            log_msg "Error output: $connect_output"
-        fi
-    fi
-
-    # Method 3: Low-level wpa_supplicant attempt
-    log_msg "🔧 Attempting low-level wpa_supplicant connection..."
-    local wpa_conf="/tmp/bad_client_$$.conf"
-    cat > "$wpa_conf" << EOF
-ctrl_interface=/run/wpa_supplicant
-ctrl_interface_group=0
-ap_scan=1
-fast_reauth=1
-
-network={
-    ssid="$ssid"
-    psk="$wrong_password"
-    key_mgmt=WPA-PSK
-    scan_ssid=1
-    priority=1
-}
-EOF
-    pkill -f "wpa_supplicant.*$INTERFACE" 2>/dev/null || true
-    sleep 1
-    if timeout "${CONNECTION_TIMEOUT:-20}" $SUDO wpa_supplicant -i "$INTERFACE" -c "$wpa_conf" -D nl80211 -d 2>/dev/null; then
-        log_msg "🚨 UNEXPECTED: wpa_supplicant succeeded with wrong password!"
-    else
-        log_msg "✓ wpa_supplicant authentication failed as expected"
-    fi
-    pkill -f "wpa_supplicant.*$INTERFACE" 2>/dev/null || true
-    rm -f "$wpa_conf"
-
-    force_disconnect
-
-    log_msg "✅ Authentication failure cycle completed"
-    return 0
-}
-
-generate_probe_traffic() {
-    log_msg "📡 Generating probe request traffic..."
-    local probe_bytes=0
-    for i in {1..3}; do
-        $SUDO nmcli device wifi rescan ifname "$INTERFACE" 2>/dev/null || true
-        probe_bytes=$((probe_bytes + 1024))  # Estimate ~1KB per scan
-        sleep 2
-    done
-    TOTAL_UP=$((TOTAL_UP + probe_bytes))
-    save_stats
-    
-    local network_count
-    network_count=$($SUDO nmcli device wifi list ifname "$INTERFACE" 2>/dev/null | wc -l || echo "0")
-    log_msg "📊 Probe scan cycle completed: $network_count networks visible (Total traffic: ${TOTAL_UP}B)"
-    sleep $((2 + RANDOM % 3))
-}
-
-attempt_multiple_failures() {
-    local ssid="$1"
-    local attempts="${2:-3}"
-    log_msg "🔥 Starting multiple authentication failure attempts for '$ssid'"
-    for ((i=1; i<=attempts; i++)); do
-        local wrong_password="${WRONG_PASSWORDS[$((RANDOM % ${#WRONG_PASSWORDS[@]}))]}"
-        log_msg "📢 Attempt $i/$attempts with password variation"
-        attempt_bad_connection "$ssid" "$wrong_password"
-        if [[ $i -lt $attempts ]]; then
-            local delay=$((5 + RANDOM % 10))
-            log_msg "⏱️ Waiting ${delay}s before next attempt..."
-            sleep "$delay"
-        fi
-    done
-    log_msg "✅ Multiple authentication failure cycle completed"
-}
-
-connect_with_hostname() {
-    local ssid="$1"
-    local password="$2"
-    local interface="$3"
-    local desired_hostname="$4"
-
-    log_msg "🔗 Connecting $interface to '$ssid' with hostname '$desired_hostname'"
-
-    set_device_hostname "$desired_hostname" "$interface"
-    configure_dhcp_hostname "$desired_hostname" "$interface"
-
-    $SUDO nmcli device disconnect "$interface" 2>/dev/null || true
-    sleep 2
-
-    local connection_name="${desired_hostname}-wifi-$$"
-    if $SUDO nmcli connection add \
-        type wifi \
-        con-name "$connection_name" \
-        ifname "$interface" \
-        ssid "$ssid" \
-        wifi-sec.key-mgmt wpa-psk \
-        wifi-sec.psk "$password" \
-        connection.dhcp-hostname "$desired_hostname" \
-        ipv4.dhcp-hostname "$desired_hostname" \
-        ipv4.dhcp-send-hostname yes \
-        ipv6.dhcp-hostname "$desired_hostname" \
-        ipv6.dhcp-send-hostname yes \
-        connection.autoconnect no 2>/dev/null; then
-        log_msg "✅ Created connection profile with hostname: $desired_hostname"
-        if $SUDO nmcli connection up "$connection_name" 2>/dev/null; then
-            log_msg "✅ Connection activated successfully"
-            sleep 10
-            verify_device_identity "$interface" "$desired_hostname"
-        else
-            log_msg "❌ Failed to activate connection"
-        fi
-        $SUDO nmcli connection delete "$connection_name" 2>/dev/null || true
-        return 0
-    else
-        log_msg "❌ Failed to create connection profile"
-        return 1
-    fi
-}
-
-# =============================================================================
-# Main Loop
-# =============================================================================
-
-enhanced_bad_client_main_loop() {
-    log_msg "🚀 Starting Wi-Fi bad client with ENHANCED identity management"
-    log_msg "Interface: $INTERFACE, Hostname: $HOSTNAME"
-    log_msg "Purpose: Generate visible authentication failures in Mist dashboard"
-
-    # System hostname one-time setup
-    local current_system_hostname
-    current_system_hostname=$(hostname)
-    if [[ "$current_system_hostname" == "localhost" ]] || [[ "$current_system_hostname" == "raspberrypi" ]] || [[ -z "$current_system_hostname" ]]; then
-        setup_system_hostname "CNXNMist-Dashboard"
-    else
-        log_msg "🏠 System hostname already set: $current_system_hostname (not changing)"
-    fi
-
-    # DHCP hostname for THIS interface (with lock)
-    set_device_hostname "$HOSTNAME" "$INTERFACE"
-    configure_dhcp_hostname "$HOSTNAME" "$INTERFACE"
-
-    verify_device_identity "$INTERFACE" "$HOSTNAME"
-
-    local cycle_count=0
-    local last_config_check=0
-    local last_identity_check=0
-
-    while true; do
-        local current_time
-        current_time=$(date +%s)
-        ((cycle_count+=1))
-        log_msg "🔴 === Bad Client Cycle $cycle_count ==="
-
-        # Periodic identity re-assertion (every 5 minutes)
-        if [[ $((current_time - last_identity_check)) -gt 300 ]]; then
-            log_msg "🔍 Periodic identity verification..."
-            set_device_hostname "$HOSTNAME" "$INTERFACE"
-            verify_device_identity "$INTERFACE" "$HOSTNAME"
-            last_identity_check=$current_time
-        fi
-
-        # Periodic config refresh (every 10 minutes)
-        if [[ $((current_time - last_config_check)) -gt 600 ]]; then
-            if read_wifi_config; then
-                last_config_check=$current_time
-                log_msg "✅ Config refreshed"
-            else
-                log_msg "⚠️ Config read failed, using previous SSID: '${SSID:-TestNetwork}'"
-                SSID="${SSID:-TestNetwork}"
-            fi
-        fi
-
-        # Interface health
-        if ! check_wifi_interface; then
-            log_msg "✗ Wi-Fi interface check failed, retrying in ${REFRESH_INTERVAL:-45}s"
-            sleep "${REFRESH_INTERVAL:-45}"
-            continue
-        fi
-
-        generate_probe_traffic
-
-        if scan_for_ssid "$SSID"; then
-            log_msg "🎯 Target SSID '$SSID' is available for authentication failure testing"
-            local attempt_count=$((2 + RANDOM % 3))  # 2-4 attempts
-            log_msg "📋 Planning $attempt_count authentication failure attempts"
-            attempt_multiple_failures "$SSID" "$attempt_count"
-        else
-            log_msg "❌ Target SSID '$SSID' not visible"
-            log_msg "🔍 Performing extended scan for SSID discovery..."
-            for scan_retry in {1..3}; do
-                log_msg "🔄 Extended scan attempt $scan_retry/3..."
-                generate_probe_traffic
-                if scan_for_ssid "$SSID"; then
-                    log_msg "✅ Found SSID on retry $scan_retry"
-                    break
-                fi
-                sleep 5
-            done
-        fi
-
-        generate_probe_traffic
-        force_disconnect
-        verify_device_identity "$INTERFACE" "$HOSTNAME"
-
-        local base="${REFRESH_INTERVAL:-45}"
-        local jitter=$((RANDOM % 15 - 7))  # -7..+7
-        local actual_interval=$((base + jitter))
-        log_msg "🔴 Bad client cycle $cycle_count completed, waiting ${actual_interval}s"
-        log_msg "📊 Summary: Attempted auth failures against '$SSID' as '$HOSTNAME'"
-
-        sleep "$actual_interval"
-    done
-}
-
-# =============================================================================
-# Cleanup & Traps
-# =============================================================================
-
-cleanup_and_exit() {
-    log_msg "🧹 Cleaning up Wi-Fi bad client simulation..."
-    # RELEASE HOSTNAME LOCK
-    release_hostname_lock "$INTERFACE"
-    pkill -f "wpa_supplicant.*$INTERFACE" 2>/dev/null || true
-    force_disconnect
-    rm -f /tmp/bad_client_*.conf
-    log_msg "✅ Wi-Fi bad client simulation stopped cleanly"
-    exit 0
-}
-
-trap cleanup_and_exit SIGTERM SIGINT EXIT
-
-# =============================================================================
-# Init
-# =============================================================================
-
-mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
-[[ -f "$SETTINGS" ]] && source "$SETTINGS" || true
-
-INTERFACE="${WIFI_BAD_INTERFACE:-$INTERFACE}"
-HOSTNAME="${WIFI_BAD_HOSTNAME:-$HOSTNAME}"
-REFRESH_INTERVAL="${WIFI_BAD_REFRESH_INTERVAL:-45}"
-CONNECTION_TIMEOUT="${WIFI_CONNECTION_TIMEOUT:-20}"
-
-WRONG_PASSWORDS=(
-    "wrongpassword123" "incorrectpwd" "badpassword" "admin123" "guest123"
-    "password123" "letmein" "12345678" "qwerty" "hackme"
-)
-
-log_msg "🔴 Wi-Fi Bad Client Starting (ENHANCED FOR MIST VISIBILITY)..."
-log_msg "Purpose: Generate REAL authentication failures visible in Mist dashboard"
-log_msg "Target interface: $INTERFACE"
-log_msg "Expected hostname: $HOSTNAME"
-
-if ! read_wifi_config; then
-    log_msg "✗ Failed to read config, using default test SSID"
-    SSID="TestNetwork"
-fi
-
-check_wifi_interface || true
-force_disconnect || true
-
-log_msg "🎯 Target SSID for auth failures: '$SSID'"
-log_msg "🔥 Starting aggressive authentication failure generation..."
-
-enhanced_bad_client_main_loop
+  # End-of-iteration persist
+  save_stats
+  log_msg "⏳ Sleeping ${REFRESH_INTERVAL}s (stats D=${TOTAL_DOWN} U=${TOTAL_UP})"
+  sleep "$REFRESH_INTERVAL"
+done
