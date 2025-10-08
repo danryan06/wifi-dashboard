@@ -88,10 +88,10 @@ Environment=WIRED_INTERFACE=${WIRED_IFACE}
 Environment=WIRED_HOSTNAME=${WIRED_HOSTNAME}
 Environment=SERVICE_NAME=wired-test
 # Cleanup stale locks before starting
-ExecStartPre=/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${WIRED_IFACE}.lock'
+ExecStartPre=-/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${WIRED_IFACE}.lock'
 ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/wired_simulation.sh
 # Cleanup locks on stop
-ExecStopPost=/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${WIRED_IFACE}.lock'
+ExecStopPost=-/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${WIRED_IFACE}.lock'
 Restart=always
 RestartSec=15
 TimeoutStartSec=60
@@ -126,9 +126,9 @@ Environment=WIFI_BAD_HOSTNAME=${WIFI_BAD_HOSTNAME}
 Environment=SERVICE_NAME=wifi-bad
 # LONGER delay to ensure wired is fully established
 ExecStartPre=/bin/sleep 15
-ExecStartPre=/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${BAD_IFACE}.lock'
+ExecStartPre=-/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${BAD_IFACE}.lock'
 ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/fail_auth_loop.sh
-ExecStopPost=/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${BAD_IFACE}.lock'
+ExecStopPost=-/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${BAD_IFACE}.lock'
 Restart=always
 RestartSec=30
 TimeoutStartSec=90
@@ -164,9 +164,9 @@ Environment=WIFI_GOOD_HOSTNAME=${WIFI_GOOD_HOSTNAME}
 Environment=SERVICE_NAME=wifi-good
 # LONGEST delay to ensure all others are established
 ExecStartPre=/bin/sleep 25
-ExecStartPre=/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${GOOD_IFACE}.lock'
+ExecStartPre=-/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${GOOD_IFACE}.lock'
 ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/connect_and_curl.sh
-ExecStopPost=/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${GOOD_IFACE}.lock'
+ExecStopPost=-/bin/bash -c 'rm -f /var/run/wifi-dashboard/hostname-${GOOD_IFACE}.lock'
 Restart=always
 RestartSec=25
 TimeoutStartSec=120

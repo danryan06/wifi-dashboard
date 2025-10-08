@@ -613,58 +613,61 @@ def api_logs(log_name):
         logger.error(f"Error in logs API endpoint: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 # --- /api/throughput (full block starts) ---
 @app.route("/api/throughput")
 def api_throughput():
     """
     Returns current per-interface throughput (Mbps) and cumulative totals (MB)
-    read from persistent stats files written by the traffic scripts.
     """
     try:
-        # psutil snapshot for current throughput
-        now_stats = psutil.net_io_counters(pernic=True)
-        a = get_interface_assignments()  # so we can decide which ifaces to show
+        # Call calculate_throughput ONCE - it returns ALL interfaces
+        throughput_data = calculate_throughput()
+        
+        a = get_interface_assignments()
         candidates = set(["eth0", a.get("good_interface", "wlan0"), a.get("bad_interface", "wlan1")])
         candidates = {i for i in candidates if i}  # drop blanks
 
         out = {}
 
         for iface in candidates:
-            # current speed calculation (you likely already have a helper; inline for clarity)
-            # NOTE: in your codebase, prefer your existing get_network_stats/calculate_throughput helpers if present.
-            rx = tx = 0
-            if iface in now_stats:
-                s = now_stats[iface]
-                rx, tx = getattr(s, "bytes_recv", 0), getattr(s, "bytes_sent", 0)
-
-            # "Active" heuristic — iface exists and has any movement
-            active = iface in now_stats
-
-            # Read persistent totals
-            persisted = read_persistent_stats(iface)  # returns bytes + timestamp
-            total_rx_mb = round(persisted.get("download", 0) / (1024 * 1024), 1)
-            total_tx_mb = round(persisted.get("upload", 0) / (1024 * 1024), 1)
-
-            # If you have a rolling Mbps helper, call it; otherwise leave as 0.00
-            # download_mbps, upload_mbps = calculate_throughput(iface)  # if present
-            download_mbps = 0.00
-            upload_mbps = 0.00
-
-            out[iface] = {
-                "download": download_mbps,
-                "upload": upload_mbps,
-                "active": active,
-                "rx_packets": 0,
-                "tx_packets": 0,
-                "total_download": total_rx_mb,
-                "total_upload": total_tx_mb,
-            }
+            if iface in throughput_data:
+                # Use the data from calculate_throughput()
+                data = throughput_data[iface]
+                
+                # Convert bytes/sec to Mbps
+                download_mbps = round((data['download'] * 8) / 1_000_000, 2)
+                upload_mbps = round((data['upload'] * 8) / 1_000_000, 2)
+                
+                # Convert bytes to MB for totals
+                total_download_mb = round(data['total_download'] / (1024 * 1024), 1)
+                total_upload_mb = round(data['total_upload'] / (1024 * 1024), 1)
+                
+                out[iface] = {
+                    "download": download_mbps,
+                    "upload": upload_mbps,
+                    "active": data['active'],
+                    "rx_packets": data.get('rx_packets', 0),
+                    "tx_packets": data.get('tx_packets', 0),
+                    "total_download": total_download_mb,
+                    "total_upload": total_upload_mb,
+                }
+            else:
+                # Interface not in throughput data
+                out[iface] = {
+                    "download": 0.0,
+                    "upload": 0.0,
+                    "active": False,
+                    "rx_packets": 0,
+                    "tx_packets": 0,
+                    "total_download": 0.0,
+                    "total_upload": 0.0,
+                }
 
         return jsonify({"success": True, "throughput": out, "timestamp": datetime.now().isoformat()})
     except Exception as e:
         logger.exception("throughput endpoint failed")
         return jsonify({"success": False, "error": str(e), "throughput": {}, "timestamp": datetime.now().isoformat()}), 500
-# --- /api/throughput (full block ends) ---
 
 @app.route("/api/interfaces")
 def api_interfaces():
