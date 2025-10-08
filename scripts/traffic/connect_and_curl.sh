@@ -393,12 +393,10 @@ get_current_bssid() {
   local bssid=""
   bssid="$(nmcli -t -f ACTIVE,BSSID,SSID dev wifi | awk -F: '$1=="yes"{print $2; exit}')" || true
   if [[ -z "$bssid" || ! "$bssid" =~ : ]]; then
-    bssid="$(iw dev "$IFACE" link 2>/dev/null | awk '/Connected to/{print $3; exit}')" || true
+    bssid="$(iw dev "$INTERFACE" link 2>/dev/null | awk '/Connected to/{print $3; exit}')" || true
   fi
-  # Defensive fallback in case some tools format weirdly
-  bssid="${bssid//\\n/}"
-  bssid="${bssid//\\r/}"
-  bssid="${bssid//\\t/}"
+  # Defensive cleanup + normalize to UPPERCASE (we store keys that way)
+  bssid="${bssid//\\n/}"; bssid="${bssid//\\r/}"; bssid="${bssid//\\t/}"
   bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
   echo "$bssid"
 }
@@ -411,7 +409,6 @@ discover_bssids_for_ssid() {
   # Pull only the SSID we care about
   while IFS=: read -r active bssid ssid signal; do
     [[ "$ssid" != "$SSID" ]] && continue
-    # Normalize and fill map
     bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
     [[ "$bssid" =~ : ]] || continue
     BSSID_SIGNALS["$bssid"]="$signal"
@@ -677,12 +674,12 @@ perform_roaming() {
   nmcli set wifi.scan-rand-mac-address no 2>/dev/null || true
 
   # Tear down cleanly and pin to target
-  nmcli dev disconnect "$IFACE" >/dev/null 2>&1 || true
+  nmcli dev disconnect "$INTERFACE" >/dev/null 2>&1 || true
   sleep 2
 
   # WPA3-Personal (SAE) reconnect pinned to BSSID
   # NOTE: --rescan no keeps the selected BSSID
-  nmcli --wait 30 dev wifi connect "$ssid" ifname "$IFACE" bssid "$target_bssid" password "$password" --rescan no
+  nmcli --wait 30 dev wifi connect "$ssid" ifname "$INTERFACE" bssid "$target_bssid" password "$password" --rescan no
 }
 
 connect_to_wifi_with_roaming() {
@@ -691,7 +688,7 @@ connect_to_wifi_with_roaming() {
   log_msg "🔗 Connecting to Wi-Fi (roaming enabled=${ROAMING_ENABLED}) for SSID '$local_ssid'"
   if discover_bssids_for_ssid "$local_ssid"; then
     local target_bssid="" best_signal=-100
-    for b in "${!DISCOVERED_BSSIDS[@]}"; do
+    for b in "${!BSSID_SIGNALS[@]}"; do
       local s="${BSSID_SIGNALS[$b]}"; [[ -n "$s" && "$s" -gt "$best_signal" ]] && best_signal="$s" && target_bssid="$b"
     done
     if [[ -n "$target_bssid" ]]; then
@@ -726,7 +723,7 @@ should_perform_roaming() {
   [[ "$ROAMING_ENABLED" != "true" ]] && return 1
   local now; now=$(date +%s)
   (( now - LAST_ROAM_TIME < ROAMING_INTERVAL )) && return 1
-  (( ${#DISCOVERED_BSSIDS[@]} < 2 )) && return 1
+  (( ${#BSSID_SIGNALS[@]} < 2 )) && return 1
   return 0
 }
 
