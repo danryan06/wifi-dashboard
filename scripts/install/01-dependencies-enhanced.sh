@@ -40,6 +40,7 @@ apt-get install -y \
     network-manager-gnome \
     python3 \
     python3-pip \
+    python3-psutil \
     curl \
     wget \
     jq \

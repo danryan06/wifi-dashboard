@@ -181,7 +181,7 @@ EOF
 log_info "Creating hostname lock directory..."
 mkdir -p /var/run/wifi-dashboard
 chown root:root /var/run/wifi-dashboard
-chmod 755 /var/run/wifi-dashboard
+chmod 1777 /var/run/wifi-dashboard
 
 # Enable services in dependency order
 log_info "Enabling services with staggered startup..."
