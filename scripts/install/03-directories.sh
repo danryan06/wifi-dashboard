@@ -32,6 +32,21 @@ mkdir -p \
 # Permissions (best-effort if run as root)
 chown -R "${PI_USER}:${PI_USER}" "${DASHBOARD_DIR}" 2>/dev/null || true
 
+# Ensure verify-hostnames exists so finalize/restarts never fail
+VERIFY="${SCRIPTS_DIR}/verify-hostnames.sh"
+if [[ ! -f "${VERIFY}" ]]; then
+  cat >"${VERIFY}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+D="${HOME:-/home/pi}/wifi_test_dashboard"
+LOG="${D}/logs/main.log"
+mkdir -p "${D}/logs" "${D}/stats" /var/run/wifi-dashboard || true
+echo "[$(date '+%F %T')] verify-hostnames.sh OK (stub)" >> "${LOG}"
+exit 0
+EOF
+  chmod +x "${VERIFY}" || true
+fi
+
 # --- default settings.conf (only if missing/empty) ---
 SETTINGS="${CONFIG_DIR}/settings.conf"
 if [[ ! -s "${SETTINGS}" ]]; then

@@ -27,7 +27,25 @@ load_stats() {
 }
 
 save_stats() {
-  echo "{\"download\": $TOTAL_DOWN, \"upload\": $TOTAL_UP, \"timestamp\": $(date +%s)}" > "$STATS_FILE"
+  local f="$STATS_FILE"
+  local now="$(date +%s)"
+  local prev_down=0 prev_up=0
+
+  if [[ -f "$f" ]]; then
+    # best-effort parse without jq to avoid zeroing
+    prev_down=$(sed -n 's/.*"download":[[:space:]]*\([0-9]\+\).*/\1/p' "$f" | head -n1)
+    prev_up=$(sed -n 's/.*"upload":[[:space:]]*\([0-9]\+\).*/\1/p' "$f" | head -n1)
+    prev_down=${prev_down:-0}; prev_up=${prev_up:-0}
+  fi
+
+  # Never decrease totals
+  [[ "$TOTAL_DOWN" =~ ^[0-9]+$ ]] || TOTAL_DOWN=0
+  [[ "$TOTAL_UP"   =~ ^[0-9]+$ ]] || TOTAL_UP=0
+  (( TOTAL_DOWN < prev_down )) && TOTAL_DOWN="$prev_down"
+  (( TOTAL_UP   < prev_up   )) && TOTAL_UP="$prev_up"
+
+  printf '{"download": %d, "upload": %d, "timestamp": %d}\n' \
+    "$TOTAL_DOWN" "$TOTAL_UP" "$now" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
 log_msg() {

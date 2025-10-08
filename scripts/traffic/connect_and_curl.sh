@@ -292,7 +292,25 @@ load_stats() {
   log_msg "📊 Loaded stats: Down=${TOTAL_DOWN}B, Up=${TOTAL_UP}B"
 }
 save_stats() {
-  echo "{\"download\": $TOTAL_DOWN, \"upload\": $TOTAL_UP, \"timestamp\": $(date +%s)}" > "$STATS_FILE"
+  local f="$STATS_FILE"
+  local now="$(date +%s)"
+  local prev_down=0 prev_up=0
+
+  if [[ -f "$f" ]]; then
+    # best-effort parse without jq to avoid zeroing
+    prev_down=$(sed -n 's/.*"download":[[:space:]]*\([0-9]\+\).*/\1/p' "$f" | head -n1)
+    prev_up=$(sed -n 's/.*"upload":[[:space:]]*\([0-9]\+\).*/\1/p' "$f" | head -n1)
+    prev_down=${prev_down:-0}; prev_up=${prev_up:-0}
+  fi
+
+  # Never decrease totals
+  [[ "$TOTAL_DOWN" =~ ^[0-9]+$ ]] || TOTAL_DOWN=0
+  [[ "$TOTAL_UP"   =~ ^[0-9]+$ ]] || TOTAL_UP=0
+  (( TOTAL_DOWN < prev_down )) && TOTAL_DOWN="$prev_down"
+  (( TOTAL_UP   < prev_up   )) && TOTAL_UP="$prev_up"
+
+  printf '{"download": %d, "upload": %d, "timestamp": %d}\n' \
+    "$TOTAL_DOWN" "$TOTAL_UP" "$now" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
 # Debounced saver (avoid excessive writes mid-cycle)
@@ -345,7 +363,6 @@ DOWNLOAD_URLS=("https://ash-speed.hetzner.com/100MB.bin" "https://proof.ovh.net/
 PING_TARGETS=("8.8.8.8" "1.1.1.1" "208.67.222.222" "9.9.9.9")
 
 # Global roaming state
-declare -A DISCOVERED_BSSIDS
 declare -A BSSID_SIGNALS
 CURRENT_BSSID=""
 LAST_ROAM_TIME=0
@@ -395,7 +412,6 @@ get_current_bssid() {
   if [[ -z "$bssid" || ! "$bssid" =~ : ]]; then
     bssid="$(iw dev "$INTERFACE" link 2>/dev/null | awk '/Connected to/{print $3; exit}')" || true
   fi
-  # Defensive cleanup + normalize to UPPERCASE (we store keys that way)
   bssid="${bssid//\\n/}"; bssid="${bssid//\\r/}"; bssid="${bssid//\\t/}"
   bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
   echo "$bssid"
@@ -686,11 +702,11 @@ connect_to_wifi_with_roaming() {
   local local_ssid="$1" local_password="$2"
   [[ -z "$local_ssid" || -z "$local_password" ]] && { log_msg "❌ connect_to_wifi_with_roaming called with empty parameters"; return 1; }
   log_msg "🔗 Connecting to Wi-Fi (roaming enabled=${ROAMING_ENABLED}) for SSID '$local_ssid'"
-  if discover_bssids_for_ssid "$local_ssid"; then
-    local target_bssid="" best_signal=-100
-    for b in "${!BSSID_SIGNALS[@]}"; do
-      local s="${BSSID_SIGNALS[$b]}"; [[ -n "$s" && "$s" -gt "$best_signal" ]] && best_signal="$s" && target_bssid="$b"
-    done
+    if discover_bssids_for_ssid "$local_ssid"; then
+      local target_bssid="" best_signal=-100
+      for b in "${!BSSID_SIGNALS[@]}"; do
+        local s="${BSSID_SIGNALS[$b]}"; [[ -n "$s" && "$s" -gt "$best_signal" ]] && best_signal="$s" && target_bssid="$b"
+      done
     if [[ -n "$target_bssid" ]]; then
       log_msg "🎯 Attempting connection to strongest BSSID $target_bssid ($best_signal dBm)"
       if connect_locked_bssid "$target_bssid" "$local_ssid" "$local_password"; then
@@ -824,7 +840,8 @@ main_loop() {
         fi
         CURRENT_BSSID=$(get_current_bssid)
         if [[ -n "$CURRENT_BSSID" ]]; then
-            log_msg "📍 Current: BSSID $CURRENT_BSSID (${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown} dBm) | Available BSSIDs: ${#BSSID_SIGNALS[@]} | Stats: D=${TOTAL_DOWN}B U=${TOTAL_UP}B"
+            log_msg "📍 Current: BSSID $CURRENT_BSSID (SIG ${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown}) | Available BSSIDs: ${#BSSID_SIGNALS[@]} | Stats: D=${TOTAL_DOWN}B U=${TOTAL_UP}B"
+
         fi
         if (( now % 300 == 0 )); then verify_device_identity "$INTERFACE" "$HOSTNAME"; fi
         log_msg "✅ Good client operating normally"
