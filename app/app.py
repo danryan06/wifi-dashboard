@@ -6,6 +6,7 @@ import time
 import re
 import json
 from datetime import datetime
+import psutil
 
 app = Flask(__name__)
 app.secret_key = 'wifi-test-dashboard-secret-key'

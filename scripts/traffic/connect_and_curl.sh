@@ -731,14 +731,27 @@ manage_roaming() {
     log_msg "⏰ Roaming interval reached, evaluating roaming opportunity..."
     CURRENT_BSSID="$(get_current_bssid)"
     local target; target="$(select_roaming_target "$CURRENT_BSSID")"
+    
+    # Check if we actually found a roaming target
     if [[ -n "$target" ]]; then
       local target_signal="${BSSID_SIGNALS[$target]}" current_signal="${BSSID_SIGNALS[$CURRENT_BSSID]:-unknown}"
       log_msg "🔄 Roaming candidate: $target (${target_signal}dBm) vs current $CURRENT_BSSID (${current_signal}dBm)"
-      if perform_roaming "$target" "$SSID" "$PASSWORD"; then
+      
+      # Protect against roaming failures crashing the script
+      set +e  # Temporarily disable exit-on-error
+      if timeout 120 perform_roaming "$target" "$SSID" "$PASSWORD" 2>&1; then
         log_msg "✅ Roaming completed successfully"
+        LAST_ROAM_TIME=$(date +%s)
       else
-        log_msg "❌ Roaming attempt failed - staying on current BSSID"
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+          log_msg "⏱️  Roaming timed out after 120s - staying on current BSSID"
+        else
+          log_msg "❌ Roaming attempt failed (code: $exit_code) - staying on current BSSID"
+        fi
       fi
+      set -e  # Re-enable exit-on-error
+      
       sleep 5
     else
       log_msg "📍 No suitable roaming target found; staying on $CURRENT_BSSID"
