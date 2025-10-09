@@ -340,7 +340,11 @@ connect_locked_bssid() {
   log_msg "🔗 Attempting BSSID-locked connection to $bssid (SSID: '$ssid')"
   
   $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
-  sleep 3
+  sleep 2
+  
+  # ✅ DELETE OLD CONNECTION PROFILE
+  $SUDO nmcli connection delete "$ssid" 2>/dev/null || true
+  sleep 1
 
   # Try direct nmcli BSSID connect
   local OUT
@@ -452,6 +456,10 @@ connect_to_wifi_with_roaming() {
   log_msg "🔄 Attempting fallback connection to SSID '$local_ssid'"
   $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
   sleep 2
+  
+  # ✅ DELETE OLD CONNECTION PROFILE
+  $SUDO nmcli connection delete "$local_ssid" 2>/dev/null || true
+  sleep 1
   
   local OUT
   if OUT="$($SUDO nmcli --wait 45 device wifi connect "${local_ssid}" password "${local_password}" ifname "$INTERFACE" 2>&1)"; then
