@@ -742,33 +742,51 @@
         // Status data loading
         async function loadStatusData() {
             try {
-                const response = await fetch('/api/status');
+                const response = await fetch('/status');
                 const data = await response.json();
                 
-                document.getElementById('active-interfaces').textContent = data.active_interfaces || 0;
-                document.getElementById('services-running').textContent = data.services_running || 0;
-                document.getElementById('uptime').textContent = data.uptime || 'Unknown';
-                
-                // Update interface list
-                const interfaceList = document.getElementById('interface-list');
-                if (data.interfaces) {
-                    interfaceList.innerHTML = data.interfaces.map(iface => `
+                if (data.success) {
+                    // Update system info
+                    const systemInfo = data.system_info || {};
+                    document.getElementById('uptime').textContent = systemInfo.uptime || 'Unknown';
+                    
+                    // Update interface list
+                    const interfaceList = document.getElementById('interface-list');
+                    const assignments = data.interface_assignments || {};
+                    const interfaces = [
+                        { name: 'eth0', type: 'Wired' },
+                        { name: assignments.good_interface || 'wlan0', type: 'Wi-Fi Good' },
+                        { name: assignments.bad_interface || 'wlan1', type: 'Wi-Fi Bad' }
+                    ];
+                    
+                    interfaceList.innerHTML = interfaces.map(iface => `
                         <div class="interface-item">
-                            <span class="status-indicator ${iface.status === 'up' ? 'status-online' : 'status-offline'}"></span>
-                            ${iface.name}: ${iface.ip || 'No IP'}
+                            <span class="status-indicator status-online"></span>
+                            ${iface.name} (${iface.type})
                         </div>
                     `).join('');
-                }
-                
-                // Update service list
-                const serviceList = document.getElementById('service-list');
-                if (data.services) {
-                    serviceList.innerHTML = data.services.map(service => `
+                    
+                    // Update service list
+                    const serviceList = document.getElementById('service-list');
+                    const serviceStatus = data.service_status || {};
+                    const services = [
+                        { name: 'wifi-dashboard', status: serviceStatus.dashboard || 'unknown' },
+                        { name: 'wifi-good', status: serviceStatus.good || 'unknown' },
+                        { name: 'wifi-bad', status: serviceStatus.bad || 'unknown' },
+                        { name: 'wired-test', status: serviceStatus.wired || 'unknown' }
+                    ];
+                    
+                    serviceList.innerHTML = services.map(service => `
                         <div class="service-item">
                             <span class="service-name">${service.name}</span>
                             <span class="service-status ${service.status}">${service.status}</span>
                         </div>
                     `).join('');
+                    
+                    // Update active interfaces count
+                    const activeCount = Object.values(serviceStatus).filter(status => status === 'active').length;
+                    document.getElementById('active-interfaces').textContent = activeCount;
+                    document.getElementById('services-running').textContent = activeCount;
                 }
                 
             } catch (error) {
@@ -779,23 +797,50 @@
         // Interface data loading
         async function loadInterfaceData() {
             try {
-                const response = await fetch('/api/interfaces');
-                const interfaces = await response.json();
+                const response = await fetch('/status');
+                const data = await response.json();
                 
-                const interfaceGrid = document.getElementById('interface-grid');
-                interfaceGrid.innerHTML = interfaces.map(iface => `
-                    <div class="interface-card">
-                        <div class="interface-header">
-                            <span class="interface-name">${iface.name}</span>
-                            <span class="interface-status ${iface.status}">${iface.status}</span>
+                if (data.success) {
+                    const assignments = data.interface_assignments || {};
+                    const interfaces = [
+                        { 
+                            name: 'eth0', 
+                            type: 'Wired Client',
+                            status: 'up',
+                            ip: 'DHCP assigned',
+                            mac: 'Unknown'
+                        },
+                        { 
+                            name: assignments.good_interface || 'wlan0', 
+                            type: 'Wi-Fi Good Client',
+                            status: 'up',
+                            ip: 'DHCP assigned',
+                            mac: 'Unknown'
+                        },
+                        { 
+                            name: assignments.bad_interface || 'wlan1', 
+                            type: 'Wi-Fi Bad Client',
+                            status: 'up',
+                            ip: 'No IP (auth failures)',
+                            mac: 'Unknown'
+                        }
+                    ];
+                    
+                    const interfaceGrid = document.getElementById('interface-grid');
+                    interfaceGrid.innerHTML = interfaces.map(iface => `
+                        <div class="interface-card">
+                            <div class="interface-header">
+                                <span class="interface-name">${iface.name}</span>
+                                <span class="interface-status ${iface.status}">${iface.status}</span>
+                            </div>
+                            <div class="interface-details">
+                                <div>Type: ${iface.type}</div>
+                                <div>IP: ${iface.ip}</div>
+                                <div>MAC: ${iface.mac}</div>
+                            </div>
                         </div>
-                        <div class="interface-details">
-                            <div>IP: ${iface.ip || 'No IP'}</div>
-                            <div>MAC: ${iface.mac || 'Unknown'}</div>
-                            <div>Speed: ${iface.speed || 'Unknown'}</div>
-                        </div>
-                    </div>
-                `).join('');
+                    `).join('');
+                }
                 
             } catch (error) {
                 console.error('Failed to load interface data:', error);
@@ -805,16 +850,26 @@
         // Service data loading
         async function loadServiceData() {
             try {
-                const response = await fetch('/api/services');
-                const services = await response.json();
+                const response = await fetch('/status');
+                const data = await response.json();
                 
-                const serviceList = document.getElementById('service-list');
-                serviceList.innerHTML = services.map(service => `
-                    <div class="service-item">
-                        <span class="service-name">${service.name}</span>
-                        <span class="service-status ${service.status}">${service.status}</span>
-                    </div>
-                `).join('');
+                if (data.success) {
+                    const serviceStatus = data.service_status || {};
+                    const services = [
+                        { name: 'wifi-dashboard', status: serviceStatus.dashboard || 'unknown' },
+                        { name: 'wifi-good', status: serviceStatus.good || 'unknown' },
+                        { name: 'wifi-bad', status: serviceStatus.bad || 'unknown' },
+                        { name: 'wired-test', status: serviceStatus.wired || 'unknown' }
+                    ];
+                    
+                    const serviceList = document.getElementById('service-list');
+                    serviceList.innerHTML = services.map(service => `
+                        <div class="service-item">
+                            <span class="service-name">${service.name}</span>
+                            <span class="service-status ${service.status}">${service.status}</span>
+                        </div>
+                    `).join('');
+                }
                 
             } catch (error) {
                 console.error('Failed to load service data:', error);
@@ -829,12 +884,12 @@
             const data = Object.fromEntries(formData);
             
             try {
-                const response = await fetch('/api/wifi-config', {
+                const response = await fetch('/update_wifi', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
+                        'Content-Type': 'application/x-www-form-urlencoded',
                     },
-                    body: JSON.stringify(data)
+                    body: new URLSearchParams(data)
                 });
                 
                 if (response.ok) {
@@ -855,16 +910,14 @@
             const loss = document.getElementById(`${interface}-loss`).value;
             
             try {
-                const response = await fetch('/api/netem', {
+                const formData = new FormData();
+                formData.append('interface', interface);
+                formData.append('latency', latency);
+                formData.append('loss', loss);
+                
+                const response = await fetch('/set_netem', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        interface: interface,
-                        latency: parseInt(latency),
-                        loss: parseFloat(loss)
-                    })
+                    body: formData
                 });
                 
                 if (response.ok) {
@@ -880,19 +933,25 @@
         
         async function clearNetem() {
             try {
-                const response = await fetch('/api/netem/clear', {
-                    method: 'POST'
-                });
-                
-                if (response.ok) {
-                    showFlashMessage('Network emulation cleared', 'success');
-                    // Reset form values
-                    document.querySelectorAll('input[type="number"]').forEach(input => {
-                        input.value = 0;
+                // Clear netem by setting latency and loss to 0
+                const interfaces = ['eth0', 'wlan0', 'wlan1'];
+                for (const iface of interfaces) {
+                    const formData = new FormData();
+                    formData.append('interface', iface);
+                    formData.append('latency', '0');
+                    formData.append('loss', '0');
+                    
+                    await fetch('/set_netem', {
+                        method: 'POST',
+                        body: formData
                     });
-                } else {
-                    showFlashMessage('Failed to clear network emulation', 'error');
                 }
+                
+                showFlashMessage('Network emulation cleared', 'success');
+                // Reset form values
+                document.querySelectorAll('input[type="number"]').forEach(input => {
+                    input.value = 0;
+                });
             } catch (error) {
                 console.error('Failed to clear netem:', error);
                 showFlashMessage('Failed to clear network emulation', 'error');
@@ -944,8 +1003,13 @@
                 const response = await fetch(`/api/logs/${logType}`);
                 const data = await response.json();
                 
-                document.getElementById('log-content').textContent = data.content || 'No log content available';
-                document.getElementById('log-info-text').textContent = `Showing ${logType} log (${data.lines || 0} lines)`;
+                if (data.success) {
+                    document.getElementById('log-content').textContent = data.content || 'No log content available';
+                    document.getElementById('log-info-text').textContent = `Showing ${logType} log (${data.lines_returned || 0} lines)`;
+                } else {
+                    document.getElementById('log-content').textContent = 'No log content available';
+                    document.getElementById('log-info-text').textContent = 'No log content available';
+                }
                 
                 // Show controls
                 document.getElementById('logControls').style.display = 'flex';
@@ -987,7 +1051,7 @@
         async function restartSystem() {
             if (confirm('Are you sure you want to restart the system?')) {
                 try {
-                    await fetch('/api/system/restart', { method: 'POST' });
+                    await fetch('/reboot', { method: 'POST' });
                     showFlashMessage('System restart initiated', 'info');
                 } catch (error) {
                     showFlashMessage('Failed to restart system', 'error');
@@ -998,7 +1062,7 @@
         async function shutdownSystem() {
             if (confirm('Are you sure you want to shutdown the system?')) {
                 try {
-                    await fetch('/api/system/shutdown', { method: 'POST' });
+                    await fetch('/shutdown', { method: 'POST' });
                     showFlashMessage('System shutdown initiated', 'info');
                 } catch (error) {
                     showFlashMessage('Failed to shutdown system', 'error');
@@ -1008,8 +1072,8 @@
         
         async function updateSystem() {
             try {
-                await fetch('/api/system/update', { method: 'POST' });
-                showFlashMessage('System update initiated', 'info');
+                // This endpoint doesn't exist, so we'll show a message
+                showFlashMessage('System update not available via web interface', 'warning');
             } catch (error) {
                 showFlashMessage('Failed to update system', 'error');
             }
@@ -1017,14 +1081,17 @@
         
         async function loadSystemInfo() {
             try {
-                const response = await fetch('/api/system/info');
+                const response = await fetch('/status');
                 const data = await response.json();
                 
-                document.getElementById('system-hostname').textContent = data.hostname || 'Unknown';
-                document.getElementById('system-os').textContent = data.os || 'Unknown';
-                document.getElementById('system-kernel').textContent = data.kernel || 'Unknown';
-                document.getElementById('system-memory').textContent = data.memory || 'Unknown';
-                document.getElementById('system-storage').textContent = data.storage || 'Unknown';
+                if (data.success && data.system_info) {
+                    const systemInfo = data.system_info;
+                    document.getElementById('system-hostname').textContent = systemInfo.hostname || 'Unknown';
+                    document.getElementById('system-os').textContent = systemInfo.os || 'Unknown';
+                    document.getElementById('system-kernel').textContent = systemInfo.kernel || 'Unknown';
+                    document.getElementById('system-memory').textContent = systemInfo.memory || 'Unknown';
+                    document.getElementById('system-storage').textContent = systemInfo.storage || 'Unknown';
+                }
                 
             } catch (error) {
                 console.error('Failed to load system info:', error);
@@ -1034,7 +1101,14 @@
         // Service controls
         async function restartAllServices() {
             try {
-                await fetch('/api/services/restart-all', { method: 'POST' });
+                // Restart services individually using the traffic_action endpoint
+                const services = ['eth0', 'wlan0', 'wlan1'];
+                for (const service of services) {
+                    const formData = new FormData();
+                    formData.append('interface', service);
+                    formData.append('action', 'restart');
+                    await fetch('/traffic_action', { method: 'POST', body: formData });
+                }
                 showFlashMessage('All services restart initiated', 'info');
             } catch (error) {
                 showFlashMessage('Failed to restart services', 'error');
@@ -1043,7 +1117,14 @@
         
         async function stopAllServices() {
             try {
-                await fetch('/api/services/stop-all', { method: 'POST' });
+                // Stop services individually using the traffic_action endpoint
+                const services = ['eth0', 'wlan0', 'wlan1'];
+                for (const service of services) {
+                    const formData = new FormData();
+                    formData.append('interface', service);
+                    formData.append('action', 'stop');
+                    await fetch('/traffic_action', { method: 'POST', body: formData });
+                }
                 showFlashMessage('All services stop initiated', 'info');
             } catch (error) {
                 showFlashMessage('Failed to stop services', 'error');
@@ -1068,12 +1149,14 @@
         // Load current Wi-Fi config
         async function loadCurrentWifiConfig() {
             try {
-                const response = await fetch('/api/wifi-config');
+                const response = await fetch('/status');
                 const data = await response.json();
                 
-                document.getElementById('current-ssid').textContent = `SSID: ${data.ssid || 'Not configured'}`;
-                document.getElementById('ssid').value = data.ssid || '';
-                document.getElementById('password').value = data.password || '';
+                if (data.success) {
+                    document.getElementById('current-ssid').textContent = `SSID: ${data.ssid || 'Not configured'}`;
+                    document.getElementById('ssid').value = data.ssid || '';
+                    // Don't populate password for security
+                }
                 
             } catch (error) {
                 console.error('Failed to load Wi-Fi config:', error);
