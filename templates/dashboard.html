@@ -489,6 +489,7 @@
             <div class="tab active" data-tab="status">📊 Status</div>
             <div class="tab" data-tab="interfaces">🔌 Interfaces</div>
             <div class="tab" data-tab="wifi">📶 Wi-Fi Config</div>
+            <div class="tab" data-tab="traffic">🚦 Traffic Control</div>
             <div class="tab" data-tab="netem">🌐 Network Emulation</div>
             <div class="tab" data-tab="services">⚙️ Services</div>
             <div class="tab" data-tab="logs">📋 Logs</div>
@@ -577,6 +578,23 @@
                 </div>
                 <button type="submit">💾 Save Configuration</button>
             </form>
+        </div>
+
+        <!-- Traffic Control Tab -->
+        <div id="traffic" class="card hidden">
+            <h2>🚦 Traffic Control</h2>
+            <p style="color: var(--muted); margin-bottom: 24px;">
+                Control traffic generation services for each interface. These services generate real network traffic for testing.
+            </p>
+            
+            <div class="interface-grid" id="traffic-control-grid">
+                <div class="spinner"></div> Loading traffic services...
+            </div>
+            
+            <div style="margin-top: 24px;">
+                <button onclick="restartAllTrafficServices()" class="secondary">🔄 Restart All Traffic Services</button>
+                <button onclick="stopAllTrafficServices()" class="secondary">⏹️ Stop All Traffic Services</button>
+            </div>
         </div>
 
         <!-- Network Emulation Tab -->
@@ -732,6 +750,8 @@
                 loadInterfaceData();
             } else if (tabName === 'services') {
                 loadServiceData();
+            } else if (tabName === 'traffic') {
+                loadTrafficControl();
             } else if (tabName === 'logs') {
                 setupLogViewer();
             } else if (tabName === 'controls') {
@@ -742,33 +762,57 @@
         // Status data loading
         async function loadStatusData() {
             try {
-                const response = await fetch('/status');
-                const data = await response.json();
+                // Load both status and throughput data
+                const [statusResponse, throughputResponse] = await Promise.all([
+                    fetch('/status'),
+                    fetch('/api/throughput')
+                ]);
                 
-                if (data.success) {
+                const statusData = await statusResponse.json();
+                const throughputData = await throughputResponse.json();
+                
+                if (statusData.success) {
                     // Update system info
-                    const systemInfo = data.system_info || {};
+                    const systemInfo = statusData.system_info || {};
                     document.getElementById('uptime').textContent = systemInfo.uptime || 'Unknown';
                     
-                    // Update interface list
+                    // Update interface list with real data
                     const interfaceList = document.getElementById('interface-list');
-                    const assignments = data.interface_assignments || {};
+                    const assignments = statusData.interface_assignments || {};
+                    const throughput = throughputData.throughput || {};
+                    
                     const interfaces = [
-                        { name: 'eth0', type: 'Wired' },
-                        { name: assignments.good_interface || 'wlan0', type: 'Wi-Fi Good' },
-                        { name: assignments.bad_interface || 'wlan1', type: 'Wi-Fi Bad' }
+                        { 
+                            name: 'eth0', 
+                            type: 'Wired',
+                            data: throughput.eth0 || {}
+                        },
+                        { 
+                            name: assignments.good_interface || 'wlan0', 
+                            type: 'Wi-Fi Good',
+                            data: throughput[assignments.good_interface || 'wlan0'] || {}
+                        },
+                        { 
+                            name: assignments.bad_interface || 'wlan1', 
+                            type: 'Wi-Fi Bad',
+                            data: throughput[assignments.bad_interface || 'wlan1'] || {}
+                        }
                     ];
                     
-                    interfaceList.innerHTML = interfaces.map(iface => `
-                        <div class="interface-item">
-                            <span class="status-indicator status-online"></span>
-                            ${iface.name} (${iface.type})
-                        </div>
-                    `).join('');
+                    interfaceList.innerHTML = interfaces.map(iface => {
+                        const status = iface.data.active ? 'online' : 'offline';
+                        const ip = iface.data.ip || 'No IP';
+                        return `
+                            <div class="interface-item">
+                                <span class="status-indicator status-${status}"></span>
+                                ${iface.name} (${iface.type}) - ${ip}
+                            </div>
+                        `;
+                    }).join('');
                     
                     // Update service list
                     const serviceList = document.getElementById('service-list');
-                    const serviceStatus = data.service_status || {};
+                    const serviceStatus = statusData.service_status || {};
                     const services = [
                         { name: 'wifi-dashboard', status: serviceStatus.dashboard || 'unknown' },
                         { name: 'wifi-good', status: serviceStatus.good || 'unknown' },
@@ -797,49 +841,65 @@
         // Interface data loading
         async function loadInterfaceData() {
             try {
-                const response = await fetch('/status');
-                const data = await response.json();
+                // Load both status and throughput data for real interface info
+                const [statusResponse, throughputResponse] = await Promise.all([
+                    fetch('/status'),
+                    fetch('/api/throughput')
+                ]);
                 
-                if (data.success) {
-                    const assignments = data.interface_assignments || {};
+                const statusData = await statusResponse.json();
+                const throughputData = await throughputResponse.json();
+                
+                if (statusData.success) {
+                    const assignments = statusData.interface_assignments || {};
+                    const throughput = throughputData.throughput || {};
+                    
                     const interfaces = [
                         { 
                             name: 'eth0', 
                             type: 'Wired Client',
-                            status: 'up',
-                            ip: 'DHCP assigned',
-                            mac: 'Unknown'
+                            data: throughput.eth0 || {},
+                            hostname: 'CNXNMist-Wired'
                         },
                         { 
                             name: assignments.good_interface || 'wlan0', 
                             type: 'Wi-Fi Good Client',
-                            status: 'up',
-                            ip: 'DHCP assigned',
-                            mac: 'Unknown'
+                            data: throughput[assignments.good_interface || 'wlan0'] || {},
+                            hostname: 'CNXNMist-WiFiGood'
                         },
                         { 
                             name: assignments.bad_interface || 'wlan1', 
                             type: 'Wi-Fi Bad Client',
-                            status: 'up',
-                            ip: 'No IP (auth failures)',
-                            mac: 'Unknown'
+                            data: throughput[assignments.bad_interface || 'wlan1'] || {},
+                            hostname: 'CNXNMist-WiFiBad'
                         }
                     ];
                     
                     const interfaceGrid = document.getElementById('interface-grid');
-                    interfaceGrid.innerHTML = interfaces.map(iface => `
-                        <div class="interface-card">
-                            <div class="interface-header">
-                                <span class="interface-name">${iface.name}</span>
-                                <span class="interface-status ${iface.status}">${iface.status}</span>
+                    interfaceGrid.innerHTML = interfaces.map(iface => {
+                        const status = iface.data.active ? 'up' : 'down';
+                        const ip = iface.data.ip || 'No IP';
+                        const mac = iface.data.mac || 'Unknown';
+                        const download = iface.data.download || 0;
+                        const upload = iface.data.upload || 0;
+                        
+                        return `
+                            <div class="interface-card">
+                                <div class="interface-header">
+                                    <span class="interface-name">${iface.name}</span>
+                                    <span class="interface-status ${status}">${status}</span>
+                                </div>
+                                <div class="interface-details">
+                                    <div><strong>Type:</strong> ${iface.type}</div>
+                                    <div><strong>IP:</strong> ${ip}</div>
+                                    <div><strong>MAC:</strong> ${mac}</div>
+                                    <div><strong>Hostname:</strong> ${iface.hostname}</div>
+                                    <div><strong>Download:</strong> ${download} Mbps</div>
+                                    <div><strong>Upload:</strong> ${upload} Mbps</div>
+                                </div>
                             </div>
-                            <div class="interface-details">
-                                <div>Type: ${iface.type}</div>
-                                <div>IP: ${iface.ip}</div>
-                                <div>MAC: ${iface.mac}</div>
-                            </div>
-                        </div>
-                    `).join('');
+                        `;
+                    }).join('');
                 }
                 
             } catch (error) {
@@ -1004,7 +1064,28 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    document.getElementById('log-content').textContent = data.content || 'No log content available';
+                    // Format log content with timestamps and better readability
+                    let content = data.content || 'No log content available';
+                    
+                    // If content is an array, join it
+                    if (Array.isArray(content)) {
+                        content = content.join('\n');
+                    }
+                    
+                    // Add some formatting for better readability
+                    if (content && content !== 'No log content available') {
+                        const lines = content.split('\n');
+                        const formattedLines = lines.map(line => {
+                            // Add timestamp formatting if not present
+                            if (line && !line.match(/^\d{4}-\d{2}-\d{2}/) && !line.match(/^\d{2}:\d{2}:\d{2}/)) {
+                                return `[${new Date().toLocaleTimeString()}] ${line}`;
+                            }
+                            return line;
+                        });
+                        content = formattedLines.join('\n');
+                    }
+                    
+                    document.getElementById('log-content').textContent = content;
                     document.getElementById('log-info-text').textContent = `Showing ${logType} log (${data.lines_returned || 0} lines)`;
                 } else {
                     document.getElementById('log-content').textContent = 'No log content available';
@@ -1098,6 +1179,91 @@
             }
         }
         
+        // Traffic Control functions
+        async function loadTrafficControl() {
+            try {
+                const response = await fetch('/traffic_status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const trafficGrid = document.getElementById('traffic-control-grid');
+                    const interfaces = data.interfaces || {};
+                    
+                    trafficGrid.innerHTML = Object.entries(interfaces).map(([interface, info]) => `
+                        <div class="interface-card">
+                            <div class="interface-header">
+                                <span class="interface-name">${interface}</span>
+                                <span class="interface-status ${info.service_status}">${info.service_status}</span>
+                            </div>
+                            <div class="interface-details">
+                                <div><strong>Service:</strong> ${info.service_name}</div>
+                                <div><strong>Description:</strong> ${info.description}</div>
+                                <div><strong>IP:</strong> ${info.ip_address}</div>
+                                <div><strong>Download:</strong> ${info.total_download_mb} MB</div>
+                                <div><strong>Upload:</strong> ${info.total_upload_mb} MB</div>
+                            </div>
+                            <div style="margin-top: 12px; display: flex; gap: 8px;">
+                                <button onclick="controlTrafficService('${interface}', 'start')" class="secondary">▶️ Start</button>
+                                <button onclick="controlTrafficService('${interface}', 'stop')" class="secondary">⏹️ Stop</button>
+                                <button onclick="controlTrafficService('${interface}', 'restart')" class="secondary">🔄 Restart</button>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                
+            } catch (error) {
+                console.error('Failed to load traffic control:', error);
+            }
+        }
+        
+        async function controlTrafficService(interface, action) {
+            try {
+                const formData = new FormData();
+                formData.append('interface', interface);
+                formData.append('action', action);
+                
+                const response = await fetch('/traffic_action', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    showFlashMessage(`Traffic service ${action} initiated for ${interface}`, 'success');
+                    // Reload traffic control to update status
+                    setTimeout(() => loadTrafficControl(), 1000);
+                } else {
+                    showFlashMessage(`Failed to ${action} traffic service for ${interface}`, 'error');
+                }
+            } catch (error) {
+                console.error('Failed to control traffic service:', error);
+                showFlashMessage(`Failed to ${action} traffic service for ${interface}`, 'error');
+            }
+        }
+        
+        async function restartAllTrafficServices() {
+            try {
+                const services = ['eth0', 'wlan0', 'wlan1'];
+                for (const service of services) {
+                    await controlTrafficService(service, 'restart');
+                }
+                showFlashMessage('All traffic services restart initiated', 'info');
+            } catch (error) {
+                showFlashMessage('Failed to restart all traffic services', 'error');
+            }
+        }
+        
+        async function stopAllTrafficServices() {
+            try {
+                const services = ['eth0', 'wlan0', 'wlan1'];
+                for (const service of services) {
+                    await controlTrafficService(service, 'stop');
+                }
+                showFlashMessage('All traffic services stop initiated', 'info');
+            } catch (error) {
+                showFlashMessage('Failed to stop all traffic services', 'error');
+            }
+        }
+
         // Service controls
         async function restartAllServices() {
             try {
