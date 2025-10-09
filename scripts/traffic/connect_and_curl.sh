@@ -204,17 +204,37 @@ read_wifi_config() {
 }
 
 check_wifi_interface() {
+  log_msg "🔍 Checking interface $INTERFACE..."
+  
   if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
-    log_msg "Interface $INTERFACE not found"
+    log_msg "❌ Interface $INTERFACE not found"
     return 1
   fi
   
+  # Check current interface state
+  local link_state
+  link_state="$(ip link show "$INTERFACE" | grep -o 'state [A-Z]*' | cut -d' ' -f2)"
+  log_msg "   Link state: $link_state"
+  
+  # Bring interface up
   $SUDO ip link set "$INTERFACE" up || true
   sleep 2
+  
+  # Ensure NetworkManager is managing it
   $SUDO nmcli device set "$INTERFACE" managed yes || true
   sleep 2
   
-  log_msg "Interface $INTERFACE ready"
+  # Check if interface is now managed
+  local managed
+  managed="$($SUDO nmcli -t -f DEVICE,STATE device status | grep "^$INTERFACE:" | cut -d: -f2)"
+  log_msg "   Managed state: $managed"
+  
+  # Force a rescan to refresh available networks
+  log_msg "   Forcing Wi-Fi rescan..."
+  $SUDO nmcli dev wifi rescan >/dev/null 2>&1 || true
+  sleep 3
+  
+  log_msg "✅ Interface $INTERFACE ready (managed: $managed)"
   return 0
 }
 
@@ -237,13 +257,25 @@ discover_bssids_for_ssid() {
   declare -gA BSSID_SIGNALS
   BSSID_SIGNALS=()
   
-  $SUDO nmcli dev wifi rescan >/dev/null 2>&1 || true
+  log_msg "🔍 Scanning for BSSIDs for SSID '$SSID'..."
   
+  # Force a rescan and wait for results
+  $SUDO nmcli dev wifi rescan >/dev/null 2>&1 || true
+  sleep 3  # Give time for scan to complete
+  
+  # Debug: Show all available networks
+  log_msg "📡 Available networks:"
+  $SUDO nmcli -t -f SSID,BSSID,SIGNAL,SECURITY dev wifi 2>/dev/null | while IFS=: read -r ssid bssid signal security; do
+    [[ -n "$ssid" ]] && log_msg "   $ssid ($bssid) - ${signal}dBm - $security"
+  done
+  
+  # Look for our specific SSID
   while IFS=: read -r active bssid ssid signal; do
     [[ "$ssid" != "$SSID" ]] && continue
     bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
     [[ "$bssid" =~ : ]] || continue
     BSSID_SIGNALS["$bssid"]="$signal"
+    log_msg "   Found BSSID: $bssid (signal: ${signal}dBm)"
   done < <($SUDO nmcli -t -f ACTIVE,BSSID,SSID,SIGNAL dev wifi 2>/dev/null)
   
   local count="${#BSSID_SIGNALS[@]}"
@@ -255,6 +287,25 @@ discover_bssids_for_ssid() {
     return 0
   else
     log_msg "⚠️ No BSSIDs discovered for '$SSID'"
+    log_msg "🔍 Debug: Checking if SSID exists with different case or spacing..."
+    
+    # Try case-insensitive search
+    while IFS=: read -r active bssid ssid signal; do
+      if [[ "${ssid,,}" == "${SSID,,}" ]]; then
+        log_msg "   Found case-insensitive match: '$ssid' (expected: '$SSID')"
+        bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
+        [[ "$bssid" =~ : ]] || continue
+        BSSID_SIGNALS["$bssid"]="$signal"
+        log_msg "   Added BSSID: $bssid (signal: ${signal}dBm)"
+      fi
+    done < <($SUDO nmcli -t -f ACTIVE,BSSID,SSID,SIGNAL dev wifi 2>/dev/null)
+    
+    local final_count="${#BSSID_SIGNALS[@]}"
+    if (( final_count > 0 )); then
+      log_msg "✅ Found ${final_count} BSSID(s) with case-insensitive search"
+      return 0
+    fi
+    
     return 1
   fi
 }
@@ -339,17 +390,62 @@ connect_locked_bssid() {
   
   log_msg "🔗 Attempting BSSID-locked connection to $bssid (SSID: '$ssid')"
   
+  # Disconnect and clean up
   $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
-  sleep 2
+  sleep 3
   
-  # ✅ DELETE OLD CONNECTION PROFILE
+  # Delete any existing connection profiles for this SSID
   $SUDO nmcli connection delete "$ssid" 2>/dev/null || true
-  sleep 1
+  $SUDO nmcli connection delete "wifi-$ssid" 2>/dev/null || true
+  sleep 2
 
-  # Try direct nmcli BSSID connect
+  # Try creating connection profile first, then connecting
+  log_msg "🔧 Creating connection profile for $ssid..."
+  local profile_name="wifi-$ssid"
+  
+  if $SUDO nmcli connection add type wifi ifname "$INTERFACE" con-name "$profile_name" ssid "$ssid" 2>/dev/null; then
+    log_msg "✅ Connection profile created: $profile_name"
+    
+    # Set security and password
+    if $SUDO nmcli connection modify "$profile_name" wifi-sec.key-mgmt wpa-psk 2>/dev/null; then
+      $SUDO nmcli connection modify "$profile_name" wifi-sec.psk "$psk" 2>/dev/null
+      log_msg "✅ Security configured for profile"
+    fi
+    
+    # Set BSSID if provided
+    if [[ -n "$bssid" ]]; then
+      $SUDO nmcli connection modify "$profile_name" wifi.bssid "$bssid" 2>/dev/null
+      log_msg "✅ BSSID locked to: $bssid"
+    fi
+    
+    # Try to activate the connection
+    log_msg "🚀 Activating connection profile..."
+    local OUT
+    if OUT="$($SUDO nmcli --wait 30 connection up "$profile_name" ifname "$INTERFACE" 2>&1)"; then
+      log_msg "✅ Connection profile activation successful"
+      sleep 5
+      
+      local actual_bssid
+      actual_bssid="$(get_current_bssid)"
+      if [[ -n "$actual_bssid" ]]; then
+        log_msg "✅ Connected to BSSID: $actual_bssid"
+        return 0
+      else
+        log_msg "⚠️ Connected but BSSID unknown"
+        return 0
+      fi
+    else
+      log_msg "❌ Connection profile activation failed: ${OUT}"
+    fi
+  else
+    log_msg "❌ Failed to create connection profile"
+  fi
+
+  # Fallback: Try direct nmcli connect
+  log_msg "🔄 Trying direct nmcli connect as fallback..."
   local OUT
-  if OUT="$($SUDO nmcli --wait 45 device wifi connect "$ssid" password "$psk" ifname "$INTERFACE" bssid "$bssid" 2>&1)"; then
-    log_msg "✅ nmcli BSSID connect successful"
+  if OUT="$($SUDO nmcli --wait 30 device wifi connect "$ssid" password "$psk" ifname "$INTERFACE" bssid "$bssid" 2>&1)"; then
+    log_msg "✅ Direct nmcli connect successful"
     sleep 5
     
     local actual_bssid
@@ -359,9 +455,10 @@ connect_locked_bssid() {
       return 0
     else
       log_msg "⚠️ BSSID mismatch: connected to ${actual_bssid:-unknown}, expected ${bssid,,}"
+      return 0  # Still consider it a success
     fi
   else
-    log_msg "❌ nmcli BSSID connect failed: ${OUT}"
+    log_msg "❌ Direct nmcli connect failed: ${OUT}"
   fi
 
   return 1
@@ -455,18 +552,49 @@ connect_to_wifi_with_roaming() {
   
   log_msg "🔄 Attempting fallback connection to SSID '$local_ssid'"
   $SUDO nmcli dev disconnect "$INTERFACE" 2>/dev/null || true
+  sleep 3
+  
+  # Clean up any existing profiles
+  $SUDO nmcli connection delete "$local_ssid" 2>/dev/null || true
+  $SUDO nmcli connection delete "wifi-$local_ssid" 2>/dev/null || true
   sleep 2
   
-  # ✅ DELETE OLD CONNECTION PROFILE
-  $SUDO nmcli connection delete "$local_ssid" 2>/dev/null || true
-  sleep 1
+  # Try creating a connection profile first
+  log_msg "🔧 Creating fallback connection profile..."
+  local profile_name="wifi-$local_ssid"
   
-  local OUT
-  if OUT="$($SUDO nmcli --wait 45 device wifi connect "${local_ssid}" password "${local_password}" ifname "$INTERFACE" 2>&1)"; then
-    log_msg "✅ Fallback connection successful"
+  if $SUDO nmcli connection add type wifi ifname "$INTERFACE" con-name "$profile_name" ssid "$local_ssid" 2>/dev/null; then
+    log_msg "✅ Fallback profile created: $profile_name"
+    
+    # Configure security
+    $SUDO nmcli connection modify "$profile_name" wifi-sec.key-mgmt wpa-psk 2>/dev/null || true
+    $SUDO nmcli connection modify "$profile_name" wifi-sec.psk "$local_password" 2>/dev/null || true
+    
+    # Try to activate
+    local OUT
+    if OUT="$($SUDO nmcli --wait 30 connection up "$profile_name" ifname "$INTERFACE" 2>&1)"; then
+      log_msg "✅ Fallback profile connection successful"
+    else
+      log_msg "❌ Fallback profile connection failed: ${OUT}"
+      
+      # Final fallback: direct connect
+      log_msg "🔄 Trying direct nmcli connect as final fallback..."
+      if OUT="$($SUDO nmcli --wait 30 device wifi connect "${local_ssid}" password "${local_password}" ifname "$INTERFACE" 2>&1)"; then
+        log_msg "✅ Direct fallback connection successful"
+      else
+        log_msg "❌ All fallback methods failed: ${OUT}"
+        return 1
+      fi
+    fi
   else
-    log_msg "❌ Fallback connection failed: ${OUT}"
-    return 1
+    log_msg "❌ Failed to create fallback profile, trying direct connect..."
+    local OUT
+    if OUT="$($SUDO nmcli --wait 30 device wifi connect "${local_ssid}" password "${local_password}" ifname "$INTERFACE" 2>&1)"; then
+      log_msg "✅ Direct fallback connection successful"
+    else
+      log_msg "❌ Direct fallback connection failed: ${OUT}"
+      return 1
+    fi
   fi
   
   CURRENT_BSSID="$(get_current_bssid)"
@@ -481,9 +609,41 @@ assess_connection_health() {
   local ip
   ip="$(ip -o -4 addr show dev "$INTERFACE" 2>/dev/null | awk '{print $4}' | head -n1)"
   
-  if [[ "$state" == "100" || "$state" == "90" || "$state" == "80" ]] && [[ -n "$ip" ]]; then
-    log_msg "✅ Connection healthy: IP=$ip, state=$state"
-    return 0
+  local ssid
+  ssid="$($SUDO nmcli -t -f ACTIVE,SSID dev wifi | awk -F: '$1=="yes"{print $2; exit}' 2>/dev/null || echo "")"
+  
+  local bssid
+  bssid="$(get_current_bssid)"
+  
+  # More detailed health assessment
+  log_msg "🔍 Connection health check:"
+  log_msg "   State: ${state:-unknown}"
+  log_msg "   IP: ${ip:-none}"
+  log_msg "   SSID: ${ssid:-none}"
+  log_msg "   BSSID: ${bssid:-none}"
+  
+  # Check if we have a valid connection state
+  if [[ "$state" == "100" || "$state" == "90" || "$state" == "80" ]]; then
+    # State looks good, check for IP
+    if [[ -n "$ip" ]]; then
+      # Test basic connectivity
+      if timeout 5 ping -I "$INTERFACE" -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+        log_msg "✅ Connection healthy: IP=$ip, state=$state, connectivity=OK"
+        return 0
+      else
+        log_msg "⚠️ Connection has IP but no internet connectivity: IP=$ip, state=$state"
+        return 1
+      fi
+    else
+      log_msg "⚠️ Connection state good but no IP assigned: state=$state"
+      return 1
+    fi
+  elif [[ "$state" == "70" ]]; then
+    log_msg "⚠️ Connection in progress: state=$state"
+    return 1
+  elif [[ "$state" == "30" ]]; then
+    log_msg "⚠️ Interface disconnected: state=$state"
+    return 1
   else
     log_msg "⚠️ Connection unhealthy: state=${state:-?}, IP=${ip:-none}"
     return 1
