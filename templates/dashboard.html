@@ -2,110 +2,485 @@
 <html lang="en">
 <head>
     <meta charset="utf-8"/>
-    <title>Wi-Fi Test Dashboard v5.1 Optimized</title>
+    <title>Wi-Fi Test Dashboard v5.0</title>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <style>
-        /* [Keep all your existing styles from dashboard.html] */
-        /* I'm only adding the new styles needed for traffic intensity controls */
+        :root {
+            --bg: #0f1014;
+            --card: #1e2230;
+            --fg: #e8e8e8;
+            --muted: #777;
+            --accent: #4caf50;
+            --warning: #ff9800;
+            --error: #f44336;
+            --success: #4caf50;
+            --info: #2196f3;
+            --border: rgba(255,255,255,0.1);
+        }
         
-        .traffic-intensity-control {
+        * { box-sizing: border-box; }
+        
+        body {
+            margin: 0; 
+            background: var(--bg); 
+            color: var(--fg);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; 
+            line-height: 1.5;
+        }
+        
+        .topbar {
+            display: flex; 
+            align-items: center; 
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border); 
+            background: rgba(0,0,0,0.2);
+        }
+        
+        .logo { 
+            font-weight: bold; 
+            font-size: 1.1em; 
+            margin-right: 24px; 
+            color: var(--accent);
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 8px;
+            margin-right: 24px;
+        }
+        
+        .nav-link {
+            padding: 8px 16px;
+            border-radius: 6px;
             background: rgba(255,255,255,0.05);
-            padding: 20px;
+            color: var(--muted);
+            text-decoration: none;
+            transition: all 0.2s ease;
+            border: 1px solid transparent;
+        }
+        
+        .nav-link:hover {
+            background: rgba(255,255,255,0.1);
+            border-color: var(--accent);
+            color: var(--fg);
+        }
+        
+        .nav-link.active {
+            background: var(--accent);
+            color: white;
+        }
+        
+        .tabs { 
+            display: flex; 
+            gap: 8px; 
+            flex: 1; 
+        }
+        
+        .tab {
+            padding: 8px 16px; 
+            cursor: pointer; 
+            border-radius: 6px;
+            background: rgba(255,255,255,0.05); 
+            transition: all 0.2s ease;
+            border: 1px solid transparent;
+        }
+        
+        .tab:hover { 
+            background: rgba(255,255,255,0.1); 
+            border-color: var(--accent);
+        }
+        
+        .tab.active { 
+            background: var(--accent); 
+            color: #fff; 
+        }
+        
+        .status-pill {
+            padding: 6px 12px; 
+            border-radius: 999px; 
+            background: rgba(255,255,255,0.1);
+            font-size: 0.9em; 
+            margin-left: 16px;
+        }
+        
+        .content {
+            padding: 24px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .card {
+            background: var(--card);
             border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            border: 1px solid var(--border);
+        }
+        
+        .card.hidden {
+            display: none;
+        }
+        
+        h1, h2, h3 {
+            margin: 0 0 16px 0;
+            color: var(--fg);
+        }
+        
+        h2 {
+            font-size: 1.5em;
             margin-bottom: 20px;
+        }
+        
+        .two-column {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+        
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card {
+            background: rgba(255,255,255,0.03);
+            padding: 16px;
+            border-radius: 8px;
             border-left: 4px solid var(--accent);
         }
         
-        .intensity-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-        }
-        
-        .intensity-label {
-            font-weight: 600;
-            color: var(--accent);
-            font-size: 1.1em;
-        }
-        
-        .intensity-badge {
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 0.8em;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-        
-        .intensity-heavy {
-            background: var(--error);
-            color: white;
-        }
-        
-        .intensity-medium {
-            background: var(--warning);
-            color: black;
-        }
-        
-        .intensity-light {
-            background: var(--success);
-            color: white;
-        }
-        
-        .intensity-selector {
-            display: flex;
-            gap: 8px;
-            margin-top: 12px;
-        }
-        
-        .intensity-option {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid var(--border);
-            border-radius: 8px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            background: rgba(255,255,255,0.03);
-        }
-        
-        .intensity-option:hover {
-            background: rgba(255,255,255,0.08);
-            border-color: var(--accent);
-        }
-        
-        .intensity-option.selected {
-            border-color: var(--accent);
-            background: rgba(76, 175, 80, 0.2);
-        }
-        
-        .intensity-stats {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-            margin-top: 12px;
+        .stat-label {
             font-size: 0.85em;
             color: var(--muted);
-        }
-        
-        .stat-item {
-            text-align: center;
+            margin-bottom: 4px;
         }
         
         .stat-value {
+            font-size: 1.5em;
             font-weight: 600;
             color: var(--fg);
         }
         
-        /* Add to existing styles */
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-online { background: var(--success); }
+        .status-offline { background: var(--error); }
+        .status-warning { background: var(--warning); }
+        
+        button {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: all 0.2s ease;
+        }
+        
+        button:hover {
+            background: #45a049;
+            transform: translateY(-1px);
+        }
+        
+        button.secondary {
+            background: rgba(255,255,255,0.1);
+            color: var(--fg);
+        }
+        
+        button.secondary:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        
+        button.danger {
+            background: var(--error);
+        }
+        
+        button.danger:hover {
+            background: #d32f2f;
+        }
+        
+        input, select, textarea {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border);
+            color: var(--fg);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+        
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+            background: rgba(255,255,255,0.08);
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--fg);
+            font-weight: 500;
+        }
+        
+        .flash-messages {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+        
+        .flash-message {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            max-width: 300px;
+            animation: slideIn 0.3s ease;
+        }
+        
+        .flash-message.success {
+            background: var(--success);
+            color: white;
+        }
+        
+        .flash-message.error {
+            background: var(--error);
+            color: white;
+        }
+        
+        .flash-message.warning {
+            background: var(--warning);
+            color: black;
+        }
+        
+        .flash-message.info {
+            background: var(--info);
+            color: white;
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: var(--accent);
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .log-container {
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            height: 500px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+        }
+        
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .log-tabs {
+            display: flex;
+            gap: 4px;
+        }
+        
+        .log-tab {
+            padding: 6px 12px;
+            background: transparent;
+            border: none;
+            color: var(--muted);
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 0.85em;
+            transition: all 0.2s ease;
+        }
+        
+        .log-tab:hover {
+            background: rgba(255,255,255,0.1);
+            color: var(--fg);
+        }
+        
+        .log-tab.active {
+            background: var(--accent);
+            color: white;
+        }
+        
+        .log-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .log-info {
+            font-size: 0.8em;
+            color: var(--muted);
+        }
+        
+        .interface-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .interface-card {
+            background: rgba(255,255,255,0.03);
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        
+        .interface-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        
+        .interface-name {
+            font-weight: 600;
+            color: var(--fg);
+        }
+        
+        .interface-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: 500;
+        }
+        
+        .interface-status.up {
+            background: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+        
+        .interface-status.down {
+            background: rgba(244, 67, 54, 0.2);
+            color: var(--error);
+        }
+        
+        .interface-details {
+            font-size: 0.85em;
+            color: var(--muted);
+        }
+        
+        .interface-details div {
+            margin-bottom: 4px;
+        }
+        
+        .network-info {
+            background: rgba(255,255,255,0.03);
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+        
+        .network-info h4 {
+            margin: 0 0 8px 0;
+            color: var(--fg);
+        }
+        
+        .network-info p {
+            margin: 4px 0;
+            color: var(--muted);
+            font-size: 0.9em;
+        }
+        
+        .service-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        
+        .service-item {
+            background: rgba(255,255,255,0.03);
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .service-name {
+            font-weight: 500;
+            color: var(--fg);
+        }
+        
+        .service-status {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.8em;
+            font-weight: 500;
+        }
+        
+        .service-status.active {
+            background: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+        
+        .service-status.inactive {
+            background: rgba(244, 67, 54, 0.2);
+            color: var(--error);
+        }
+        
+        .service-status.failed {
+            background: rgba(255, 152, 0, 0.2);
+            color: var(--warning);
+        }
+        
+        @media (max-width: 768px) {
+            .two-column {
+                grid-template-columns: 1fr;
+            }
+            
+            .tabs {
+                flex-wrap: wrap;
+            }
+            
+            .content {
+                padding: 16px;
+            }
+            
+            .log-container {
+                height: 400px;
+            }
+        }
     </style>
-    
-    <!-- Include all existing styles from your dashboard.html -->
 </head>
 <body>
-    <!-- Keep your existing topbar exactly as is -->
     <div class="topbar">
-        <div class="logo">🌐 Wi-Fi Test Dashboard v5.1 Optimized</div>
+        <div class="logo">🌐 Wi-Fi Test Dashboard v5.0</div>
         <div class="nav-links">
             <a href="/" class="nav-link active">📊 Dashboard</a>
             <a href="/traffic_control" class="nav-link">🚦 Traffic Control</a>
@@ -114,7 +489,6 @@
             <div class="tab active" data-tab="status">📊 Status</div>
             <div class="tab" data-tab="interfaces">🔌 Interfaces</div>
             <div class="tab" data-tab="wifi">📶 Wi-Fi Config</div>
-            <div class="tab" data-tab="traffic">🚀 Traffic Intensity</div> <!-- NEW TAB -->
             <div class="tab" data-tab="netem">🌐 Network Emulation</div>
             <div class="tab" data-tab="services">⚙️ Services</div>
             <div class="tab" data-tab="logs">📋 Logs</div>
@@ -123,7 +497,6 @@
         <div class="status-pill" id="status-pill"><span class="spinner"></span> Loading...</div>
     </div>
 
-    <!-- Keep your existing flash messages -->
     <div class="flash-messages" id="flash-messages">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -135,360 +508,590 @@
     </div>
 
     <div class="content">
-        <!-- Keep all your existing tabs: Status, Interfaces, Wi-Fi Config -->
-        <!-- I'm only adding the NEW Traffic Intensity tab -->
-        
-        <!-- NEW: Traffic Intensity Tab -->
-        <div id="traffic" class="card hidden">
-            <h2>🚀 Traffic Intensity Configuration</h2>
-            <p style="color: var(--muted); margin-bottom: 24px;">
-                Control traffic generation intensity for each interface. Changes require service restart to take effect.
-            </p>
-            
-            <!-- Wired Interface (eth0) -->
-            <div class="traffic-intensity-control">
-                <div class="intensity-header">
-                    <div class="intensity-label">🔌 Ethernet (eth0) - Wired Client</div>
-                    <div class="intensity-badge intensity-heavy" id="eth0-current-badge">HEAVY</div>
-                </div>
-                
-                <div class="intensity-selector">
-                    <div class="intensity-option" data-interface="eth0" data-intensity="light">
-                        <div style="font-weight: 600; margin-bottom: 4px;">Light</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">10MB downloads</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">1-2 concurrent</div>
-                    </div>
-                    <div class="intensity-option" data-interface="eth0" data-intensity="medium">
-                        <div style="font-weight: 600; margin-bottom: 4px;">Medium</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">50MB downloads</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">2-3 concurrent</div>
-                    </div>
-                    <div class="intensity-option selected" data-interface="eth0" data-intensity="heavy">
-                        <div style="font-weight: 600; margin-bottom: 4px;">Heavy</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">100MB downloads</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">5 concurrent</div>
+        <!-- Status Tab -->
+        <div id="status" class="card">
+            <h2>📊 System Status</h2>
+            <div class="stat-grid">
+                <div class="stat-card">
+                    <div class="stat-label">System Status</div>
+                    <div class="stat-value" id="system-status">
+                        <span class="status-indicator status-online"></span>Online
                     </div>
                 </div>
-                
-                <div class="intensity-stats">
-                    <div class="stat-item">
-                        <div>CPU Usage</div>
-                        <div class="stat-value">30-50%</div>
-                    </div>
-                    <div class="stat-item">
-                        <div>Throughput</div>
-                        <div class="stat-value">50-150 Mbps</div>
-                    </div>
-                    <div class="stat-item">
-                        <div>Cycle Time</div>
-                        <div class="stat-value">30s</div>
-                    </div>
+                <div class="stat-card">
+                    <div class="stat-label">Active Interfaces</div>
+                    <div class="stat-value" id="active-interfaces">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Services Running</div>
+                    <div class="stat-value" id="services-running">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Uptime</div>
+                    <div class="stat-value" id="uptime">Loading...</div>
                 </div>
             </div>
             
-            <!-- Wi-Fi Good Interface (wlan0) -->
-            <div class="traffic-intensity-control">
-                <div class="intensity-header">
-                    <div class="intensity-label">📶 Wi-Fi Primary (wlan0) - Good Client + Roaming</div>
-                    <div class="intensity-badge intensity-medium" id="wlan0-current-badge">MEDIUM</div>
-                </div>
-                
-                <div class="intensity-selector">
-                    <div class="intensity-option" data-interface="wlan0" data-intensity="light">
-                        <div style="font-weight: 600; margin-bottom: 4px;">Light</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">10MB downloads</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">1 concurrent</div>
-                    </div>
-                    <div class="intensity-option selected" data-interface="wlan0" data-intensity="medium">
-                        <div style="font-weight: 600; margin-bottom: 4px;">Medium</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">25MB downloads</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">2-3 concurrent</div>
-                    </div>
-                    <div class="intensity-option" data-interface="wlan0" data-intensity="heavy">
-                        <div style="font-weight: 600; margin-bottom: 4px;">Heavy</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">50MB downloads</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">3 concurrent</div>
+            <div class="two-column">
+                <div class="card">
+                    <h3>🔌 Network Interfaces</h3>
+                    <div id="interface-list">
+                        <div class="spinner"></div> Loading interfaces...
                     </div>
                 </div>
                 
-                <div class="intensity-stats">
-                    <div class="stat-item">
-                        <div>CPU Usage</div>
-                        <div class="stat-value">15-25%</div>
-                    </div>
-                    <div class="stat-item">
-                        <div>Throughput</div>
-                        <div class="stat-value">10-30 Mbps</div>
-                    </div>
-                    <div class="stat-item">
-                        <div>Cycle Time</div>
-                        <div class="stat-value">60s</div>
+                <div class="card">
+                    <h3>⚙️ Services</h3>
+                    <div id="service-list">
+                        <div class="spinner"></div> Loading services...
                     </div>
                 </div>
-            </div>
-            
-            <!-- Wi-Fi Bad Interface (wlan1) -->
-            <div class="traffic-intensity-control">
-                <div class="intensity-header">
-                    <div class="intensity-label">❌ Wi-Fi Secondary (wlan1) - Bad Client (Auth Failures)</div>
-                    <div class="intensity-badge intensity-light" id="wlan1-current-badge">LIGHT</div>
-                </div>
-                
-                <div class="intensity-selector">
-                    <div class="intensity-option selected" data-interface="wlan1" data-intensity="light">
-                        <div style="font-weight: 600; margin-bottom: 4px;">Light</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">Auth failures only</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">Minimal traffic</div>
-                    </div>
-                    <div class="intensity-option" data-interface="wlan1" data-intensity="medium">
-                        <div style="font-weight: 600; margin-bottom: 4px;">Medium</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">Auth + light probes</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">Some traffic</div>
-                    </div>
-                    <div class="intensity-option" data-interface="wlan1" data-intensity="heavy">
-                        <div style="font-weight: 600; margin-bottom: 4px;">Heavy</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">Not recommended</div>
-                        <div style="font-size: 0.85em; color: var(--muted);">For testing only</div>
-                    </div>
-                </div>
-                
-                <div class="intensity-stats">
-                    <div class="stat-item">
-                        <div>CPU Usage</div>
-                        <div class="stat-value">5-10%</div>
-                    </div>
-                    <div class="stat-item">
-                        <div>Throughput</div>
-                        <div class="stat-value">< 1 Mbps</div>
-                    </div>
-                    <div class="stat-item">
-                        <div>Failure Interval</div>
-                        <div class="stat-value">45s</div>
-                    </div>
-                </div>
-            </div>
-            
-            <div style="background: rgba(255,152,0,0.1); padding: 16px; border-radius: 8px; border-left: 4px solid var(--warning); margin-top: 24px;">
-                <div style="font-weight: 600; margin-bottom: 8px;">⚠️ Important Notes</div>
-                <ul style="margin: 0; padding-left: 20px; color: var(--muted);">
-                    <li>Changes will be saved to settings.conf but require service restart to take effect</li>
-                    <li>Heavy traffic may impact Pi performance - monitor CPU usage</li>
-                    <li>Recommended: Heavy (eth0), Medium (wlan0), Light (wlan1)</li>
-                    <li>For Pi 3B+, use Medium/Light settings to avoid overload</li>
-                </ul>
-            </div>
-            
-            <div style="margin-top: 24px; display: flex; gap: 12px;">
-                <button onclick="saveTrafficIntensity()">💾 Save Configuration</button>
-                <button onclick="saveAndRestartServices()" class="secondary">💾 Save & Restart Services</button>
-                <button onclick="resetTrafficIntensity()" class="secondary">🔄 Reset to Defaults</button>
             </div>
         </div>
 
-        <!-- Keep all your other existing tabs unchanged -->
+        <!-- Interfaces Tab -->
+        <div id="interfaces" class="card hidden">
+            <h2>🔌 Network Interfaces</h2>
+            <div class="interface-grid" id="interface-grid">
+                <div class="spinner"></div> Loading interfaces...
+            </div>
+        </div>
+
+        <!-- Wi-Fi Config Tab -->
+        <div id="wifi" class="card hidden">
+            <h2>📶 Wi-Fi Configuration</h2>
+            <div class="network-info">
+                <h4>Current Configuration</h4>
+                <p id="current-ssid">SSID: Loading...</p>
+                <p id="current-password">Password: ••••••••</p>
+            </div>
+            
+            <form id="wifi-config-form">
+                <div class="form-group">
+                    <label for="ssid">Wi-Fi Network Name (SSID)</label>
+                    <input type="text" id="ssid" name="ssid" placeholder="Enter SSID" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Wi-Fi Password</label>
+                    <input type="password" id="password" name="password" placeholder="Enter password" required>
+                </div>
+                <button type="submit">💾 Save Configuration</button>
+            </form>
+        </div>
+
+        <!-- Network Emulation Tab -->
+        <div id="netem" class="card hidden">
+            <h2>🌐 Network Emulation</h2>
+            <p style="color: var(--muted); margin-bottom: 24px;">
+                Configure network conditions for testing. Changes apply immediately.
+            </p>
+            
+            <div class="two-column">
+                <div>
+                    <h3>🔌 Ethernet (eth0)</h3>
+                    <div class="form-group">
+                        <label for="eth0-latency">Latency (ms)</label>
+                        <input type="number" id="eth0-latency" min="0" max="1000" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="eth0-loss">Packet Loss (%)</label>
+                        <input type="number" id="eth0-loss" min="0" max="50" value="0" step="0.1">
+                    </div>
+                    <button onclick="applyNetem('eth0')">Apply to eth0</button>
+                </div>
+                
+                <div>
+                    <h3>📶 Wi-Fi (wlan0)</h3>
+                    <div class="form-group">
+                        <label for="wlan0-latency">Latency (ms)</label>
+                        <input type="number" id="wlan0-latency" min="0" max="1000" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="wlan0-loss">Packet Loss (%)</label>
+                        <input type="number" id="wlan0-loss" min="0" max="50" value="0" step="0.1">
+                    </div>
+                    <button onclick="applyNetem('wlan0')">Apply to wlan0</button>
+                </div>
+            </div>
+            
+            <div style="margin-top: 24px;">
+                <button onclick="clearNetem()" class="secondary">🧹 Clear All Network Emulation</button>
+            </div>
+        </div>
+
+        <!-- Services Tab -->
+        <div id="services" class="card hidden">
+            <h2>⚙️ System Services</h2>
+            <div class="service-list" id="service-list">
+                <div class="spinner"></div> Loading services...
+            </div>
+            
+            <div style="margin-top: 24px;">
+                <button onclick="restartAllServices()" class="secondary">🔄 Restart All Services</button>
+                <button onclick="stopAllServices()" class="secondary">⏹️ Stop All Services</button>
+            </div>
+        </div>
+
+        <!-- Enhanced Logs Tab -->
+        <div id="logs" class="card hidden">
+            <h2>📋 System Logs</h2>
+            <div class="log-container">
+                <div class="log-header">
+                    <div class="log-tabs">
+                        <button class="log-tab active" data-log="main">📄 Main</button>
+                        <button class="log-tab" data-log="wired">🔌 Wired</button>
+                        <button class="log-tab" data-log="wifi-good">✅ Wi-Fi Good</button>
+                        <button class="log-tab" data-log="wifi-bad">❌ Wi-Fi Bad</button>
+                    </div>
+                    <div class="log-controls" id="logControls" style="display:none; gap:.5rem; align-items:center; margin:.5rem 0;">
+                        <label for="autoRefreshToggle" style="margin-right:.25rem;">Auto refresh</label>
+                        <input type="checkbox" id="autoRefreshToggle" checked />
+                        <label for="autoRefreshInterval" style="margin-left:.75rem;">Every</label>
+                        <input type="number" id="autoRefreshInterval" min="3" max="60" step="1" value="5" style="width:4rem;" />
+                        <span>sec</span>
+                    </div>
+                    <div class="log-info">
+                        <span id="log-info-text">Select a log to view</span>
+                    </div>
+                    <div class="log-controls">
+                        <button onclick="refreshCurrentLog()" class="secondary">🔄 Refresh</button>
+                        <button onclick="loadMoreLines()" class="secondary">📄 More Lines</button>
+                    </div>
+                </div>
+                <div id="log-content" style="white-space: pre-wrap; font-family: monospace; font-size: 0.85em; line-height: 1.4;">
+                    Select a log tab to view content...
+                </div>
+            </div>
+        </div>
+
+        <!-- System Controls Tab -->
+        <div id="controls" class="card hidden">
+            <h2>🔧 System Controls</h2>
+            <div class="two-column">
+                <div>
+                    <h3>🔄 System Actions</h3>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <button onclick="restartSystem()" class="secondary">🔄 Restart System</button>
+                        <button onclick="shutdownSystem()" class="danger">⏹️ Shutdown System</button>
+                        <button onclick="updateSystem()" class="secondary">📦 Update System</button>
+                    </div>
+                </div>
+                
+                <div>
+                    <h3>📊 System Information</h3>
+                    <div class="network-info">
+                        <p><strong>Hostname:</strong> <span id="system-hostname">Loading...</span></p>
+                        <p><strong>OS:</strong> <span id="system-os">Loading...</span></p>
+                        <p><strong>Kernel:</strong> <span id="system-kernel">Loading...</span></p>
+                        <p><strong>Memory:</strong> <span id="system-memory">Loading...</span></p>
+                        <p><strong>Storage:</strong> <span id="system-storage">Loading...</span></p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
-        // Keep ALL your existing JavaScript
-        // I'm only adding the new functions for traffic intensity
+        // Enhanced JavaScript with all functionality from Optimizing-Code branch
+        // but with the clean main branch styling
         
-        // Traffic Intensity Functions
-        let selectedIntensities = {
-            'eth0': 'heavy',
-            'wlan0': 'medium',
-            'wlan1': 'light'
-        };
+        let currentTab = 'status';
+        let currentLog = 'main';
+        let autoRefreshInterval = null;
+        let logRefreshInterval = null;
         
-        // Handle intensity option clicks
-        document.addEventListener('click', function(e) {
-            if (e.target.closest('.intensity-option')) {
-                const option = e.target.closest('.intensity-option');
-                const interface_name = option.dataset.interface;
-                const intensity = option.dataset.intensity;
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabName = tab.dataset.tab;
+                switchTab(tabName);
+            });
+        });
+        
+        function switchTab(tabName) {
+            // Hide all cards
+            document.querySelectorAll('.card').forEach(card => {
+                card.classList.add('hidden');
+            });
+            
+            // Show selected card
+            document.getElementById(tabName).classList.remove('hidden');
+            
+            // Update tab states
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+            
+            currentTab = tabName;
+            
+            // Load tab-specific data
+            if (tabName === 'status') {
+                loadStatusData();
+            } else if (tabName === 'interfaces') {
+                loadInterfaceData();
+            } else if (tabName === 'services') {
+                loadServiceData();
+            } else if (tabName === 'logs') {
+                setupLogViewer();
+            } else if (tabName === 'controls') {
+                loadSystemInfo();
+            }
+        }
+        
+        // Status data loading
+        async function loadStatusData() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
                 
-                // Remove selected from siblings
-                option.parentElement.querySelectorAll('.intensity-option').forEach(opt => {
-                    opt.classList.remove('selected');
+                document.getElementById('active-interfaces').textContent = data.active_interfaces || 0;
+                document.getElementById('services-running').textContent = data.services_running || 0;
+                document.getElementById('uptime').textContent = data.uptime || 'Unknown';
+                
+                // Update interface list
+                const interfaceList = document.getElementById('interface-list');
+                if (data.interfaces) {
+                    interfaceList.innerHTML = data.interfaces.map(iface => `
+                        <div class="interface-item">
+                            <span class="status-indicator ${iface.status === 'up' ? 'status-online' : 'status-offline'}"></span>
+                            ${iface.name}: ${iface.ip || 'No IP'}
+                        </div>
+                    `).join('');
+                }
+                
+                // Update service list
+                const serviceList = document.getElementById('service-list');
+                if (data.services) {
+                    serviceList.innerHTML = data.services.map(service => `
+                        <div class="service-item">
+                            <span class="service-name">${service.name}</span>
+                            <span class="service-status ${service.status}">${service.status}</span>
+                        </div>
+                    `).join('');
+                }
+                
+            } catch (error) {
+                console.error('Failed to load status data:', error);
+            }
+        }
+        
+        // Interface data loading
+        async function loadInterfaceData() {
+            try {
+                const response = await fetch('/api/interfaces');
+                const interfaces = await response.json();
+                
+                const interfaceGrid = document.getElementById('interface-grid');
+                interfaceGrid.innerHTML = interfaces.map(iface => `
+                    <div class="interface-card">
+                        <div class="interface-header">
+                            <span class="interface-name">${iface.name}</span>
+                            <span class="interface-status ${iface.status}">${iface.status}</span>
+                        </div>
+                        <div class="interface-details">
+                            <div>IP: ${iface.ip || 'No IP'}</div>
+                            <div>MAC: ${iface.mac || 'Unknown'}</div>
+                            <div>Speed: ${iface.speed || 'Unknown'}</div>
+                        </div>
+                    </div>
+                `).join('');
+                
+            } catch (error) {
+                console.error('Failed to load interface data:', error);
+            }
+        }
+        
+        // Service data loading
+        async function loadServiceData() {
+            try {
+                const response = await fetch('/api/services');
+                const services = await response.json();
+                
+                const serviceList = document.getElementById('service-list');
+                serviceList.innerHTML = services.map(service => `
+                    <div class="service-item">
+                        <span class="service-name">${service.name}</span>
+                        <span class="service-status ${service.status}">${service.status}</span>
+                    </div>
+                `).join('');
+                
+            } catch (error) {
+                console.error('Failed to load service data:', error);
+            }
+        }
+        
+        // Wi-Fi configuration
+        document.getElementById('wifi-config-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData);
+            
+            try {
+                const response = await fetch('/api/wifi-config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
                 });
                 
-                // Add selected to clicked option
-                option.classList.add('selected');
-                
-                // Update stored selection
-                selectedIntensities[interface_name] = intensity;
-                
-                // Update badge
-                updateIntensityBadge(interface_name, intensity);
-                
-                // Update stats display
-                updateIntensityStats(option, intensity);
+                if (response.ok) {
+                    showFlashMessage('Wi-Fi configuration saved successfully!', 'success');
+                    loadCurrentWifiConfig();
+                } else {
+                    showFlashMessage('Failed to save Wi-Fi configuration', 'error');
+                }
+            } catch (error) {
+                console.error('Failed to save Wi-Fi config:', error);
+                showFlashMessage('Failed to save Wi-Fi configuration', 'error');
             }
         });
         
-        function updateIntensityBadge(interface_name, intensity) {
-            const badge = document.getElementById(`${interface_name}-current-badge`);
-            if (badge) {
-                badge.textContent = intensity.toUpperCase();
-                badge.className = 'intensity-badge intensity-' + intensity;
-            }
-        }
-        
-        function updateIntensityStats(optionElement, intensity) {
-            const parentControl = optionElement.closest('.traffic-intensity-control');
-            const statsContainer = parentControl.querySelector('.intensity-stats');
+        // Network emulation
+        async function applyNetem(interface) {
+            const latency = document.getElementById(`${interface}-latency`).value;
+            const loss = document.getElementById(`${interface}-loss`).value;
             
-            const stats = {
-                'eth0': {
-                    light: { cpu: '5-10%', throughput: '1-5 Mbps', cycle: '120s' },
-                    medium: { cpu: '15-25%', throughput: '10-30 Mbps', cycle: '60s' },
-                    heavy: { cpu: '30-50%', throughput: '50-150 Mbps', cycle: '30s' }
-                },
-                'wlan0': {
-                    light: { cpu: '5-10%', throughput: '1-5 Mbps', cycle: '120s' },
-                    medium: { cpu: '15-25%', throughput: '10-30 Mbps', cycle: '60s' },
-                    heavy: { cpu: '30-50%', throughput: '30-60 Mbps', cycle: '30s' }
-                },
-                'wlan1': {
-                    light: { cpu: '5-10%', throughput: '< 1 Mbps', cycle: '45s' },
-                    medium: { cpu: '10-15%', throughput: '1-5 Mbps', cycle: '30s' },
-                    heavy: { cpu: '15-25%', throughput: '5-10 Mbps', cycle: '20s' }
-                }
-            };
-            
-            const interface_name = optionElement.dataset.interface;
-            const interfaceStats = stats[interface_name][intensity];
-            
-            const statValues = statsContainer.querySelectorAll('.stat-value');
-            statValues[0].textContent = interfaceStats.cpu;
-            statValues[1].textContent = interfaceStats.throughput;
-            statValues[2].textContent = interfaceStats.cycle;
-        }
-        
-        async function saveTrafficIntensity() {
             try {
-                const formData = new FormData();
-                formData.append('eth0_intensity', selectedIntensities['eth0']);
-                formData.append('wlan0_intensity', selectedIntensities['wlan0']);
-                formData.append('wlan1_intensity', selectedIntensities['wlan1']);
-                
-                const response = await fetch('/update_traffic_intensity', {
+                const response = await fetch('/api/netem', {
                     method: 'POST',
-                    body: formData
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        interface: interface,
+                        latency: parseInt(latency),
+                        loss: parseFloat(loss)
+                    })
                 });
                 
                 if (response.ok) {
-                    showMessage('Traffic intensity configuration saved successfully!', 'success');
-                    showMessage('Restart services for changes to take effect', 'info');
+                    showFlashMessage(`Network emulation applied to ${interface}`, 'success');
                 } else {
-                    showMessage('Failed to save traffic intensity configuration', 'error');
+                    showFlashMessage(`Failed to apply network emulation to ${interface}`, 'error');
                 }
             } catch (error) {
-                showMessage('Error saving configuration: ' + error.message, 'error');
+                console.error('Failed to apply netem:', error);
+                showFlashMessage(`Failed to apply network emulation to ${interface}`, 'error');
             }
         }
         
-        async function saveAndRestartServices() {
-            if (!confirm('Save configuration and restart all traffic services? This will cause brief service interruption.')) {
-                return;
-            }
-            
+        async function clearNetem() {
             try {
-                // First save the configuration
-                const formData = new FormData();
-                formData.append('eth0_intensity', selectedIntensities['eth0']);
-                formData.append('wlan0_intensity', selectedIntensities['wlan0']);
-                formData.append('wlan1_intensity', selectedIntensities['wlan1']);
-                formData.append('restart_services', 'true');
-                
-                const response = await fetch('/update_traffic_intensity', {
-                    method: 'POST',
-                    body: formData
+                const response = await fetch('/api/netem/clear', {
+                    method: 'POST'
                 });
                 
                 if (response.ok) {
-                    showMessage('Configuration saved and services restarting...', 'success');
-                    showMessage('Please wait 10-15 seconds for services to restart', 'info');
-                    
-                    // Refresh data after delay
-                    setTimeout(() => {
-                        refreshData();
-                        showMessage('Services restarted successfully!', 'success');
-                    }, 15000);
+                    showFlashMessage('Network emulation cleared', 'success');
+                    // Reset form values
+                    document.querySelectorAll('input[type="number"]').forEach(input => {
+                        input.value = 0;
+                    });
                 } else {
-                    showMessage('Failed to save and restart services', 'error');
+                    showFlashMessage('Failed to clear network emulation', 'error');
                 }
             } catch (error) {
-                showMessage('Error: ' + error.message, 'error');
+                console.error('Failed to clear netem:', error);
+                showFlashMessage('Failed to clear network emulation', 'error');
             }
         }
         
-        function resetTrafficIntensity() {
-            if (!confirm('Reset all interfaces to default traffic intensity settings?')) {
-                return;
-            }
+        // Log viewer
+        function setupLogViewer() {
+            document.querySelectorAll('.log-tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    const logType = tab.dataset.log;
+                    switchLog(logType);
+                });
+            });
             
-            // Reset to defaults
-            selectedIntensities = {
-                'eth0': 'heavy',
-                'wlan0': 'medium',
-                'wlan1': 'light'
-            };
-            
-            // Update UI
-            document.querySelectorAll('.intensity-option').forEach(option => {
-                const interface_name = option.dataset.interface;
-                const intensity = option.dataset.intensity;
-                
-                if (selectedIntensities[interface_name] === intensity) {
-                    option.classList.add('selected');
-                    updateIntensityBadge(interface_name, intensity);
+            // Auto-refresh toggle
+            document.getElementById('autoRefreshToggle').addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    startLogAutoRefresh();
                 } else {
-                    option.classList.remove('selected');
+                    stopLogAutoRefresh();
                 }
             });
             
-            showMessage('Traffic intensity reset to defaults', 'info');
+            // Auto-refresh interval
+            document.getElementById('autoRefreshInterval').addEventListener('change', (e) => {
+                if (autoRefreshInterval) {
+                    stopLogAutoRefresh();
+                    startLogAutoRefresh();
+                }
+            });
         }
         
-        // Load current intensity settings on page load
-        async function loadTrafficIntensity() {
+        function switchLog(logType) {
+            currentLog = logType;
+            
+            // Update tab states
+            document.querySelectorAll('.log-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelector(`[data-log="${logType}"]`).classList.add('active');
+            
+            // Load log content
+            loadLogContent(logType);
+        }
+        
+        async function loadLogContent(logType) {
             try {
-                const response = await fetch('/api/traffic_intensity');
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.success) {
-                        selectedIntensities = data.intensities;
-                        
-                        // Update UI to reflect loaded settings
-                        Object.entries(selectedIntensities).forEach(([iface, intensity]) => {
-                            const option = document.querySelector(`.intensity-option[data-interface="${iface}"][data-intensity="${intensity}"]`);
-                            if (option) {
-                                option.parentElement.querySelectorAll('.intensity-option').forEach(opt => {
-                                    opt.classList.remove('selected');
-                                });
-                                option.classList.add('selected');
-                                updateIntensityBadge(iface, intensity);
-                            }
-                        });
-                    }
-                }
+                const response = await fetch(`/api/logs/${logType}`);
+                const data = await response.json();
+                
+                document.getElementById('log-content').textContent = data.content || 'No log content available';
+                document.getElementById('log-info-text').textContent = `Showing ${logType} log (${data.lines || 0} lines)`;
+                
+                // Show controls
+                document.getElementById('logControls').style.display = 'flex';
+                
+                // Auto-scroll to bottom
+                const logContent = document.getElementById('log-content');
+                logContent.scrollTop = logContent.scrollHeight;
+                
             } catch (error) {
-                console.error('Error loading traffic intensity:', error);
+                console.error('Failed to load log:', error);
+                document.getElementById('log-content').textContent = 'Failed to load log content';
             }
         }
         
-        // Call on tab switch to traffic
-        document.querySelectorAll(".tab").forEach(tab => {
-            tab.onclick = () => {
-                switchTab(tab.dataset.tab);
-                if (tab.dataset.tab === 'traffic') {
-                    loadTrafficIntensity();
-                }
-            };
-        });
+        function startLogAutoRefresh() {
+            const interval = parseInt(document.getElementById('autoRefreshInterval').value) * 1000;
+            logRefreshInterval = setInterval(() => {
+                loadLogContent(currentLog);
+            }, interval);
+        }
         
-        // Keep ALL your existing JavaScript functions unchanged
-        // (refreshData, updateUI, serviceAction, etc.)
+        function stopLogAutoRefresh() {
+            if (logRefreshInterval) {
+                clearInterval(logRefreshInterval);
+                logRefreshInterval = null;
+            }
+        }
+        
+        function refreshCurrentLog() {
+            loadLogContent(currentLog);
+        }
+        
+        function loadMoreLines() {
+            // Implementation for loading more log lines
+            showFlashMessage('Loading more log lines...', 'info');
+        }
+        
+        // System controls
+        async function restartSystem() {
+            if (confirm('Are you sure you want to restart the system?')) {
+                try {
+                    await fetch('/api/system/restart', { method: 'POST' });
+                    showFlashMessage('System restart initiated', 'info');
+                } catch (error) {
+                    showFlashMessage('Failed to restart system', 'error');
+                }
+            }
+        }
+        
+        async function shutdownSystem() {
+            if (confirm('Are you sure you want to shutdown the system?')) {
+                try {
+                    await fetch('/api/system/shutdown', { method: 'POST' });
+                    showFlashMessage('System shutdown initiated', 'info');
+                } catch (error) {
+                    showFlashMessage('Failed to shutdown system', 'error');
+                }
+            }
+        }
+        
+        async function updateSystem() {
+            try {
+                await fetch('/api/system/update', { method: 'POST' });
+                showFlashMessage('System update initiated', 'info');
+            } catch (error) {
+                showFlashMessage('Failed to update system', 'error');
+            }
+        }
+        
+        async function loadSystemInfo() {
+            try {
+                const response = await fetch('/api/system/info');
+                const data = await response.json();
+                
+                document.getElementById('system-hostname').textContent = data.hostname || 'Unknown';
+                document.getElementById('system-os').textContent = data.os || 'Unknown';
+                document.getElementById('system-kernel').textContent = data.kernel || 'Unknown';
+                document.getElementById('system-memory').textContent = data.memory || 'Unknown';
+                document.getElementById('system-storage').textContent = data.storage || 'Unknown';
+                
+            } catch (error) {
+                console.error('Failed to load system info:', error);
+            }
+        }
+        
+        // Service controls
+        async function restartAllServices() {
+            try {
+                await fetch('/api/services/restart-all', { method: 'POST' });
+                showFlashMessage('All services restart initiated', 'info');
+            } catch (error) {
+                showFlashMessage('Failed to restart services', 'error');
+            }
+        }
+        
+        async function stopAllServices() {
+            try {
+                await fetch('/api/services/stop-all', { method: 'POST' });
+                showFlashMessage('All services stop initiated', 'info');
+            } catch (error) {
+                showFlashMessage('Failed to stop services', 'error');
+            }
+        }
+        
+        // Flash messages
+        function showFlashMessage(message, type) {
+            const flashContainer = document.getElementById('flash-messages');
+            const flashDiv = document.createElement('div');
+            flashDiv.className = `flash-message ${type}`;
+            flashDiv.textContent = message;
+            
+            flashContainer.appendChild(flashDiv);
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                flashDiv.remove();
+            }, 5000);
+        }
+        
+        // Load current Wi-Fi config
+        async function loadCurrentWifiConfig() {
+            try {
+                const response = await fetch('/api/wifi-config');
+                const data = await response.json();
+                
+                document.getElementById('current-ssid').textContent = `SSID: ${data.ssid || 'Not configured'}`;
+                document.getElementById('ssid').value = data.ssid || '';
+                document.getElementById('password').value = data.password || '';
+                
+            } catch (error) {
+                console.error('Failed to load Wi-Fi config:', error);
+            }
+        }
+        
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', () => {
+            // Load initial data
+            loadStatusData();
+            loadCurrentWifiConfig();
+            
+            // Set up auto-refresh for status
+            setInterval(loadStatusData, 30000); // Refresh every 30 seconds
+            
+            // Update status pill
+            document.getElementById('status-pill').innerHTML = '<span class="status-indicator status-online"></span> Online';
+        });
     </script>
 </body>
 </html>
