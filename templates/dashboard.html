@@ -29,8 +29,8 @@
         }
         
         .topbar {
-            display: flex; 
-            align-items: center; 
+            display: flex;
+            align-items: center;
             padding: 12px 16px;
             border-bottom: 1px solid var(--border); 
             background: rgba(0,0,0,0.2);
@@ -38,7 +38,7 @@
         
         .logo { 
             font-weight: bold; 
-            font-size: 1.1em; 
+            font-size: 1.1em;
             margin-right: 24px; 
             color: var(--accent);
         }
@@ -96,7 +96,7 @@
         }
         
         .status-pill {
-            padding: 6px 12px; 
+            padding: 6px 12px;
             border-radius: 999px; 
             background: rgba(255,255,255,0.1);
             font-size: 0.9em; 
@@ -397,6 +397,35 @@
             margin-bottom: 4px;
         }
         
+        .throughput-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .throughput-item {
+            background: rgba(255,255,255,0.03);
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+        
+        .throughput-interface {
+            font-weight: 600;
+            color: var(--fg);
+            margin-bottom: 8px;
+        }
+        
+        .throughput-stats {
+            font-size: 0.9em;
+            color: var(--muted);
+        }
+        
+        .throughput-stats div {
+            margin-bottom: 4px;
+        }
+        
         .network-info {
             background: rgba(255,255,255,0.03);
             padding: 16px;
@@ -533,30 +562,35 @@
                 </div>
             </div>
             
+            <div class="network-info">
+                <h4>Network Interfaces</h4>
+                <div class="interface-list" id="interface-list">Loading...</div>
+            </div>
+            
+            <div class="network-info">
+                <h4>📊 Real-Time Throughput</h4>
+                <div class="throughput-grid" id="throughput-grid">Loading...</div>
+            </div>
+            
             <div class="two-column">
-                <div class="card">
-                    <h3>🔌 Network Interfaces</h3>
-                    <div id="interface-list">
-                        <div class="spinner"></div> Loading interfaces...
-                    </div>
+                <div>
+                    <h3>Active Connections</h3>
+                    <pre id="active-connections">Loading...</pre>
                 </div>
-                
-                <div class="card">
-                    <h3>⚙️ Services</h3>
-                    <div id="service-list">
-                        <div class="spinner"></div> Loading services...
-                    </div>
+                <div>
+                    <h3>Network Emulation Status</h3>
+                    <pre id="netem-status">Loading...</pre>
                 </div>
             </div>
         </div>
-
+                
         <!-- Interfaces Tab -->
         <div id="interfaces" class="card hidden">
             <h2>🔌 Network Interfaces</h2>
             <div class="interface-grid" id="interface-grid">
                 <div class="spinner"></div> Loading interfaces...
-            </div>
-        </div>
+                    </div>
+                    </div>
 
         <!-- Wi-Fi Config Tab -->
         <div id="wifi" class="card hidden">
@@ -565,7 +599,7 @@
                 <h4>Current Configuration</h4>
                 <p id="current-ssid">SSID: Loading...</p>
                 <p id="current-password">Password: ••••••••</p>
-            </div>
+                    </div>
             
             <form id="wifi-config-form">
                 <div class="form-group">
@@ -578,8 +612,8 @@
                 </div>
                 <button type="submit">💾 Save Configuration</button>
             </form>
-        </div>
-
+            </div>
+            
         <!-- Traffic Control Tab -->
         <div id="traffic" class="card hidden">
             <h2>🚦 Traffic Control</h2>
@@ -589,13 +623,13 @@
             
             <div class="interface-grid" id="traffic-control-grid">
                 <div class="spinner"></div> Loading traffic services...
-            </div>
-            
+                </div>
+                
             <div style="margin-top: 24px;">
                 <button onclick="restartAllTrafficServices()" class="secondary">🔄 Restart All Traffic Services</button>
                 <button onclick="stopAllTrafficServices()" class="secondary">⏹️ Stop All Traffic Services</button>
-            </div>
-        </div>
+                    </div>
+                    </div>
 
         <!-- Network Emulation Tab -->
         <div id="netem" class="card hidden">
@@ -629,26 +663,26 @@
                         <input type="number" id="wlan0-loss" min="0" max="50" value="0" step="0.1">
                     </div>
                     <button onclick="applyNetem('wlan0')">Apply to wlan0</button>
+                    </div>
                 </div>
-            </div>
             
             <div style="margin-top: 24px;">
                 <button onclick="clearNetem()" class="secondary">🧹 Clear All Network Emulation</button>
             </div>
-        </div>
-
+            </div>
+            
         <!-- Services Tab -->
         <div id="services" class="card hidden">
             <h2>⚙️ System Services</h2>
             <div class="service-list" id="service-list">
                 <div class="spinner"></div> Loading services...
-            </div>
-            
+                </div>
+                
             <div style="margin-top: 24px;">
                 <button onclick="restartAllServices()" class="secondary">🔄 Restart All Services</button>
                 <button onclick="stopAllServices()" class="secondary">⏹️ Stop All Services</button>
-            </div>
-        </div>
+                    </div>
+                    </div>
 
         <!-- Enhanced Logs Tab -->
         <div id="logs" class="card hidden">
@@ -667,7 +701,7 @@
                         <label for="autoRefreshInterval" style="margin-left:.75rem;">Every</label>
                         <input type="number" id="autoRefreshInterval" min="3" max="60" step="1" value="5" style="width:4rem;" />
                         <span>sec</span>
-                    </div>
+                </div>
                     <div class="log-info">
                         <span id="log-info-text">Select a log to view</span>
                     </div>
@@ -675,13 +709,13 @@
                         <button onclick="refreshCurrentLog()" class="secondary">🔄 Refresh</button>
                         <button onclick="loadMoreLines()" class="secondary">📄 More Lines</button>
                     </div>
-                </div>
+                    </div>
                 <div id="log-content" style="white-space: pre-wrap; font-family: monospace; font-size: 0.85em; line-height: 1.4;">
                     Select a log tab to view content...
                 </div>
             </div>
-        </div>
-
+            </div>
+            
         <!-- System Controls Tab -->
         <div id="controls" class="card hidden">
             <h2>🔧 System Controls</h2>
@@ -692,9 +726,9 @@
                         <button onclick="restartSystem()" class="secondary">🔄 Restart System</button>
                         <button onclick="shutdownSystem()" class="danger">⏹️ Shutdown System</button>
                         <button onclick="updateSystem()" class="secondary">📦 Update System</button>
-                    </div>
-                </div>
-                
+            </div>
+        </div>
+
                 <div>
                     <h3>📊 System Information</h3>
                     <div class="network-info">
@@ -810,27 +844,35 @@
                         `;
                     }).join('');
                     
-                    // Update service list
-                    const serviceList = document.getElementById('service-list');
-                    const serviceStatus = statusData.service_status || {};
-                    const services = [
-                        { name: 'wifi-dashboard', status: serviceStatus.dashboard || 'unknown' },
-                        { name: 'wifi-good', status: serviceStatus.good || 'unknown' },
-                        { name: 'wifi-bad', status: serviceStatus.bad || 'unknown' },
-                        { name: 'wired-test', status: serviceStatus.wired || 'unknown' }
-                    ];
-                    
-                    serviceList.innerHTML = services.map(service => `
-                        <div class="service-item">
-                            <span class="service-name">${service.name}</span>
-                            <span class="service-status ${service.status}">${service.status}</span>
+                    // Update throughput grid
+                    const throughputGrid = document.getElementById('throughput-grid');
+                    throughputGrid.innerHTML = Object.entries(throughput).map(([iface, data]) => `
+                        <div class="throughput-item">
+                            <div class="throughput-interface">${iface}</div>
+                            <div class="throughput-stats">
+                                <div>↓ ${data.download || 0} Mbps</div>
+                                <div>↑ ${data.upload || 0} Mbps</div>
+                            </div>
                         </div>
                     `).join('');
                     
+                    // Update active connections
+                    const activeConnections = document.getElementById('active-connections');
+                    const connections = Object.entries(throughput).filter(([_, data]) => data.active).length;
+                    activeConnections.textContent = `Active: ${connections} interfaces`;
+                    
+                    // Update netem status
+                    const netemStatus = document.getElementById('netem-status');
+                    netemStatus.textContent = 'Network emulation: Disabled';
+                    
                     // Update active interfaces count
-                    const activeCount = Object.values(serviceStatus).filter(status => status === 'active').length;
+                    const activeCount = Object.values(throughput).filter(data => data.active).length;
                     document.getElementById('active-interfaces').textContent = activeCount;
-                    document.getElementById('services-running').textContent = activeCount;
+                    
+                    // Update services count
+                    const serviceStatus = statusData.service_status || {};
+                    const servicesCount = Object.values(serviceStatus).filter(status => status === 'active').length;
+                    document.getElementById('services-running').textContent = servicesCount;
                 }
                 
             } catch (error) {
@@ -1060,8 +1102,16 @@
         
         async function loadLogContent(logType) {
             try {
+                console.log(`Loading log: ${logType}`);
                 const response = await fetch(`/api/logs/${logType}`);
+                console.log(`Log response status: ${response.status}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
+                console.log(`Log data:`, data);
                 
                 if (data.success) {
                     // Format log content with timestamps and better readability
@@ -1072,24 +1122,16 @@
                         content = content.join('\n');
                     }
                     
-                    // Add some formatting for better readability
-                    if (content && content !== 'No log content available') {
-                        const lines = content.split('\n');
-                        const formattedLines = lines.map(line => {
-                            // Add timestamp formatting if not present
-                            if (line && !line.match(/^\d{4}-\d{2}-\d{2}/) && !line.match(/^\d{2}:\d{2}:\d{2}/)) {
-                                return `[${new Date().toLocaleTimeString()}] ${line}`;
-                            }
-                            return line;
-                        });
-                        content = formattedLines.join('\n');
+                    // Handle empty content
+                    if (!content || content.trim() === '') {
+                        content = `No recent activity in ${logType} log.\n\nThis could mean:\n- The service hasn't started yet\n- No recent log entries\n- Log file doesn't exist yet`;
                     }
                     
                     document.getElementById('log-content').textContent = content;
                     document.getElementById('log-info-text').textContent = `Showing ${logType} log (${data.lines_returned || 0} lines)`;
                 } else {
-                    document.getElementById('log-content').textContent = 'No log content available';
-                    document.getElementById('log-info-text').textContent = 'No log content available';
+                    document.getElementById('log-content').textContent = `Error loading ${logType} log: ${data.error || 'Unknown error'}`;
+                    document.getElementById('log-info-text').textContent = 'Error loading log';
                 }
                 
                 // Show controls
@@ -1101,7 +1143,8 @@
                 
             } catch (error) {
                 console.error('Failed to load log:', error);
-                document.getElementById('log-content').textContent = 'Failed to load log content';
+                document.getElementById('log-content').textContent = `Failed to load ${logType} log: ${error.message}`;
+                document.getElementById('log-info-text').textContent = 'Failed to load log';
             }
         }
         
