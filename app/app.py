@@ -6,6 +6,7 @@ import time
 import re
 import json
 from datetime import datetime
+import threading
 import psutil
 
 app = Flask(__name__)
@@ -16,6 +17,109 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "configs", "ssid.conf")
 SETTINGS_FILE = os.path.join(BASE_DIR, "configs", "settings.conf")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
+
+IFACES = ["eth0", "wlan0", "wlan1"]
+STATS_DIR = "/home/pi/wifi_test_dashboard/stats"
+BASELINE_FILE = os.path.join(STATS_DIR, "io_baselines.json")
+_MB = 1024 * 1024
+
+_state_lock = threading.Lock()
+_state = {
+    "prev": {},          # {iface: {"rx": int, "tx": int}}
+    "totals": {},        # {iface: {"download": int_bytes, "upload": int_bytes}}
+    "last_ts": None,
+}
+
+def _read_now():
+    per = psutil.net_io_counters(pernic=True)
+    now = {}
+    for i in IFACES:
+        if i in per:
+            now[i] = {"rx": per[i].bytes_recv, "tx": per[i].bytes_sent}
+    return now
+
+def _load_baseline():
+    try:
+        with open(BASELINE_FILE, "r") as f:
+            data = json.load(f)
+            # sanity
+            data.setdefault("prev", {})
+            data.setdefault("totals", {})
+            data.setdefault("last_ts", time.time())
+            return data
+    except Exception:
+        return {"prev": {}, "totals": {}, "last_ts": time.time()}
+
+def _save_baseline():
+    os.makedirs(STATS_DIR, exist_ok=True)
+    tmp = BASELINE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(_state, f)
+    os.replace(tmp, BASELINE_FILE)
+
+def get_kernel_throughput():
+    """Return dict: iface -> {download, upload, total_download, total_upload}"""
+    with _state_lock:
+        # first run: initialize from disk (if present)
+        if _state["last_ts"] is None or not _state["prev"]:
+            data = _load_baseline()
+            _state.update(data)
+            if not _state["prev"]:
+                _state["prev"] = _read_now()
+                _state["last_ts"] = time.time()
+                for i in IFACES:
+                    _state["totals"].setdefault(i, {"download": 0, "upload": 0})
+                _save_baseline()
+                # first response has no deltas yet
+                out = {}
+                for i in IFACES:
+                    t = _state["totals"].get(i, {"download": 0, "upload": 0})
+                    out[i] = {
+                        "download": 0.0,
+                        "upload": 0.0,
+                        "total_download": t["download"] / _MB,
+                        "total_upload":   t["upload"] / _MB,
+                    }
+                return out
+
+        now = _read_now()
+        t = time.time()
+        dt = max(t - (_state["last_ts"] or t), 1e-3)
+
+        out = {}
+        for i in IFACES:
+            prev = _state["prev"].get(i)
+            cur  = now.get(i, prev)
+            if not cur:
+                # iface missing → zeros
+                out[i] = {"download": 0.0, "upload": 0.0,
+                          "total_download": _state["totals"].get(i, {"download":0})["download"] / _MB,
+                          "total_upload":   _state["totals"].get(i, {"upload":0})["upload"] / _MB}
+                continue
+
+            if not prev:
+                prev = cur
+
+            # bytes since last sample (no negatives)
+            dr = max(0, cur["rx"] - prev["rx"])
+            du = max(0, cur["tx"] - prev["tx"])
+
+            # Mbps = bits/sec / 1e6
+            out[i] = {"download": (dr * 8.0) / dt / 1e6,
+                      "upload":   (du * 8.0) / dt / 1e6}
+
+            # accumulate totals (bytes)
+            tot = _state["totals"].setdefault(i, {"download": 0, "upload": 0})
+            tot["download"] += dr
+            tot["upload"]   += du
+
+            out[i]["total_download"] = tot["download"] / _MB
+            out[i]["total_upload"]   = tot["upload"] / _MB
+
+        _state["prev"] = now
+        _state["last_ts"] = t
+        _save_baseline()
+        return out
 
 @app.after_request
 def after_request(response):
@@ -618,56 +722,43 @@ def api_logs(log_name):
 @app.route("/api/throughput")
 def api_throughput():
     """
-    Returns current per-interface throughput (Mbps) and cumulative totals (MB)
+    Returns current per-interface throughput (Mbps) and cumulative totals (MB),
+    based on kernel counters. No dependence on shell-written JSON stats.
     """
     try:
-        # Call calculate_throughput ONCE - it returns ALL interfaces
-        throughput_data = calculate_throughput()
-        
+        # Use your assignment helper to decide which interfaces to expose
         a = get_interface_assignments()
         candidates = set(["eth0", a.get("good_interface", "wlan0"), a.get("bad_interface", "wlan1")])
-        candidates = {i for i in candidates if i}  # drop blanks
+        candidates = {i for i in candidates if i}
+
+        # Kernel-based rates + totals
+        kdata = get_kernel_throughput()
+
+        # One psutil snapshot for packets/active flags
+        io = psutil.net_io_counters(pernic=True)
+        stats = psutil.net_if_stats()
 
         out = {}
-
         for iface in candidates:
-            if iface in throughput_data:
-                # Use the data from calculate_throughput()
-                data = throughput_data[iface]
-                
-                # Convert bytes/sec to Mbps
-                download_mbps = round((data['download'] * 8) / 1_000_000, 2)
-                upload_mbps = round((data['upload'] * 8) / 1_000_000, 2)
-                
-                # Convert bytes to MB for totals
-                total_download_mb = round(data['total_download'] / (1024 * 1024), 1)
-                total_upload_mb = round(data['total_upload'] / (1024 * 1024), 1)
-                
-                out[iface] = {
-                    "download": download_mbps,
-                    "upload": upload_mbps,
-                    "active": data['active'],
-                    "rx_packets": data.get('rx_packets', 0),
-                    "tx_packets": data.get('tx_packets', 0),
-                    "total_download": total_download_mb,
-                    "total_upload": total_upload_mb,
-                }
-            else:
-                # Interface not in throughput data
-                out[iface] = {
-                    "download": 0.0,
-                    "upload": 0.0,
-                    "active": False,
-                    "rx_packets": 0,
-                    "tx_packets": 0,
-                    "total_download": 0.0,
-                    "total_upload": 0.0,
-                }
+            d = kdata.get(iface, {"download": 0.0, "upload": 0.0, "total_download": 0.0, "total_upload": 0.0})
+            i = io.get(iface)
+            s = stats.get(iface)
 
-        return jsonify({"success": True, "throughput": out, "timestamp": datetime.now().isoformat()})
+            out[iface] = {
+                "active": bool(s and s.isup),
+                "download": round(float(d["download"]), 2),            # Mbps
+                "upload":   round(float(d["upload"]),   2),            # Mbps
+                "rx_packets": int(getattr(i, "packets_recv", 0) or 0),
+                "tx_packets": int(getattr(i, "packets_sent", 0) or 0),
+                "total_download": round(float(d["total_download"]), 1),  # MB
+                "total_upload":   round(float(d["total_upload"]),   1),  # MB
+            }
+
+        return jsonify({"success": True, "throughput": out, "timestamp": datetime.utcnow().isoformat()})
     except Exception as e:
         logger.exception("throughput endpoint failed")
-        return jsonify({"success": False, "error": str(e), "throughput": {}, "timestamp": datetime.now().isoformat()}), 500
+        return jsonify({"success": False, "error": str(e), "throughput": {}, "timestamp": datetime.utcnow().isoformat()}), 500
+
 
 @app.route("/api/interfaces")
 def api_interfaces():

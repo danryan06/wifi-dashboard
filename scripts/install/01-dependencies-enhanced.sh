@@ -44,6 +44,7 @@ apt-get install -y \
     curl \
     wget \
     jq \
+    threading \
     iproute2 \
     wireless-tools \
     wpasupplicant \
