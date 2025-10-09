@@ -15,9 +15,11 @@ app.secret_key = 'wifi-test-dashboard-secret-key'
 # CONFIGURATION
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(BASE_DIR, "configs", "ssid.conf")
-SETTINGS_FILE = os.path.join(BASE_DIR, "configs", "settings.conf")
-LOG_DIR = os.path.join(BASE_DIR, "logs")
+# Use top-level dashboard directories so web UI and services read/write the same files
+ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
+CONFIG_FILE = os.path.join(ROOT_DIR, "configs", "ssid.conf")
+SETTINGS_FILE = os.path.join(ROOT_DIR, "configs", "settings.conf")
+LOG_DIR = os.path.join(ROOT_DIR, "logs")
 
 IFACES = ["eth0", "wlan0", "wlan1"]
 STATS_DIR = "/home/pi/wifi_test_dashboard/stats"
