@@ -6,7 +6,12 @@
 # - Robust error handling and validation
 
 set -Eeuo pipefail
-trap 'echo -e "\033[0;31m[ERROR]\033[0m ❌ Installation failed at line $LINENO. See log: $INSTALL_LOG"' ERR
+
+# Initialize log file
+INSTALL_LOG="/tmp/wifi-dashboard-install.log"
+mkdir -p "$(dirname "$INSTALL_LOG")"
+
+trap 'echo -e "\033[0;31m[ERROR]\033[0m ❌ Installation failed at line $LINENO. See log: ${INSTALL_LOG:-/tmp/wifi-dashboard-install.log}"' ERR
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Config
