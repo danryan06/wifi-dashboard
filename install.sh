@@ -11,7 +11,36 @@ trap 'echo -e "\033[0;31m[ERROR]\033[0m ❌ Installation failed at line $LINENO.
 # ───────────────────────────────────────────────────────────────────────────────
 # Config
 # ───────────────────────────────────────────────────────────────────────────────
-REPO_URL="${REPO_URL:-https://raw.githubusercontent.com/danryan06/wifi-dashboard/main}"
+# Auto-detect the branch from the curl command that downloaded this script
+detect_branch() {
+  # Look for the curl command in the process list that downloaded this script
+  local curl_cmd
+  curl_cmd=$(ps aux | grep -E "curl.*githubusercontent.*wifi-dashboard.*install\.sh" | grep -v grep | head -1)
+  
+  if [[ -n "$curl_cmd" ]]; then
+    # Extract branch from URL like: .../wifi-dashboard/Optimizing-Code/install.sh
+    if [[ "$curl_cmd" =~ githubusercontent\.com/[^/]+/[^/]+/([^/]+)/install\.sh ]]; then
+      echo "${BASH_REMATCH[1]}"
+      return
+    fi
+  fi
+  
+  # Fallback: check if BRANCH environment variable is set
+  if [[ -n "${BRANCH:-}" ]]; then
+    echo "$BRANCH"
+    return
+  fi
+  
+  # Default fallback
+  echo "Optimizing-Code"
+}
+
+DETECTED_BRANCH="$(detect_branch)"
+REPO_URL="${REPO_URL:-https://raw.githubusercontent.com/danryan06/wifi-dashboard/$DETECTED_BRANCH}"
+
+# Log the detected branch for debugging
+echo "🔍 Detected branch: $DETECTED_BRANCH"
+echo "🔗 Using repository URL: $REPO_URL"
 PI_USER="${PI_USER:-$(getent passwd 1000 | cut -d: -f1 2>/dev/null || echo 'pi')}"
 PI_HOME="/home/$PI_USER"
 VERSION="${VERSION:-v5.1.0-optimized}"
