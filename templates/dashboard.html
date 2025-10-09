@@ -854,30 +854,22 @@
                     const throughputGrid = document.getElementById('throughput-grid');
                     const throughputEntries = Object.entries(throughput);
                     
-                    // Calculate totals
-                    const totalDownload = throughputEntries.reduce((sum, [_, data]) => sum + (data.download || 0), 0);
-                    const totalUpload = throughputEntries.reduce((sum, [_, data]) => sum + (data.upload || 0), 0);
-                    
-                    throughputGrid.innerHTML = [
-                        // Totals card
-                        `<div class="throughput-item" style="border: 2px solid var(--accent); background: rgba(76, 175, 80, 0.1);">
-                            <div class="throughput-interface" style="color: var(--accent); font-weight: bold;">TOTAL</div>
-                            <div class="throughput-stats">
-                                <div>↓ ${totalDownload.toFixed(2)} Mbps</div>
-                                <div>↑ ${totalUpload.toFixed(2)} Mbps</div>
-                            </div>
-                        </div>`,
-                        // Individual interface cards
-                        ...throughputEntries.map(([iface, data]) => `
+                    throughputGrid.innerHTML = throughputEntries.map(([iface, data]) => {
+                        const totalDownload = (data.total_download || 0).toFixed(1);
+                        const totalUpload = (data.total_upload || 0).toFixed(1);
+                        const currentDownload = (data.download || 0).toFixed(2);
+                        const currentUpload = (data.upload || 0).toFixed(2);
+                        
+                        return `
                             <div class="throughput-item">
                                 <div class="throughput-interface">${iface}</div>
                                 <div class="throughput-stats">
-                                    <div>↓ ${data.download || 0} Mbps</div>
-                                    <div>↑ ${data.upload || 0} Mbps</div>
+                                    <div>↓ ${currentDownload} Mbps (${totalDownload} MB total)</div>
+                                    <div>↑ ${currentUpload} Mbps (${totalUpload} MB total)</div>
                                 </div>
                             </div>
-                        `)
-                    ].join('');
+                        `;
+                    }).join('');
                     
                     // Update active connections
                     const activeConnections = document.getElementById('active-connections');

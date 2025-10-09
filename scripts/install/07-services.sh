@@ -54,15 +54,19 @@ cat > /etc/systemd/system/wired-test.service <<EOF
 Description=Wired Network Client (${WIRED_IFACE})
 After=network-online.target NetworkManager.service
 Wants=network-online.target
+# Start FIRST to establish hostname
+Before=wifi-good.service wifi-bad.service
 
 [Service]
 Type=simple
 User=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
 Environment=INTERFACE=${WIRED_IFACE}
+Environment=HOSTNAME=CNXNMist-Wired
 ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/wired_simulation.sh
 Restart=always
 RestartSec=15
+TimeoutStartSec=60
 
 [Install]
 WantedBy=multi-user.target
@@ -75,18 +79,24 @@ log_info "Creating wifi-good.service..."
 cat > /etc/systemd/system/wifi-good.service <<EOF
 [Unit]
 Description=Wi-Fi Good Client with Roaming (${GOOD_IFACE})
-After=network-online.target NetworkManager.service
+After=network-online.target NetworkManager.service wired-test.service
 Wants=network-online.target
+# Start AFTER wired to avoid hostname conflicts
+After=wired-test.service
 
 [Service]
 Type=simple
 User=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
 Environment=INTERFACE=${GOOD_IFACE}
+Environment=HOSTNAME=CNXNMist-WiFiGood
 Environment=WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood
+# Short delay to ensure wired is established
+ExecStartPre=/bin/sleep 10
 ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/connect_and_curl.sh
 Restart=always
 RestartSec=20
+TimeoutStartSec=90
 
 [Install]
 WantedBy=multi-user.target
@@ -100,18 +110,24 @@ if [[ -n "${BAD_IFACE}" && "${BAD_IFACE}" != "none" ]]; then
     cat > /etc/systemd/system/wifi-bad.service <<EOF
 [Unit]
 Description=Wi-Fi Bad Client - Auth Failures (${BAD_IFACE})
-After=network-online.target NetworkManager.service
+After=network-online.target NetworkManager.service wired-test.service
 Wants=network-online.target
+# Start AFTER wired to avoid hostname conflicts
+After=wired-test.service
 
 [Service]
 Type=simple
 User=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
 Environment=INTERFACE=${BAD_IFACE}
+Environment=HOSTNAME=CNXNMist-WiFiBad
 Environment=WIFI_BAD_HOSTNAME=CNXNMist-WiFiBad
+# Short delay to ensure wired is established
+ExecStartPre=/bin/sleep 5
 ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/fail_auth_loop.sh
 Restart=always
 RestartSec=30
+TimeoutStartSec=60
 
 [Install]
 WantedBy=multi-user.target
