@@ -22,21 +22,27 @@ detect_branch() {
   local curl_cmd
   curl_cmd=$(ps aux | grep -E "curl.*githubusercontent.*wifi-dashboard.*install\.sh" | grep -v grep | head -1)
   
+  echo "🔍 Debug: curl_cmd = '$curl_cmd'"
+  
   if [[ -n "$curl_cmd" ]]; then
     # Extract branch from URL like: .../wifi-dashboard/Optimizing-Code/install.sh
     if [[ "$curl_cmd" =~ githubusercontent\.com/[^/]+/[^/]+/([^/]+)/install\.sh ]]; then
-      echo "${BASH_REMATCH[1]}"
+      local detected="${BASH_REMATCH[1]}"
+      echo "🔍 Debug: detected branch = '$detected'"
+      echo "$detected"
       return
     fi
   fi
   
   # Fallback: check if BRANCH environment variable is set
   if [[ -n "${BRANCH:-}" ]]; then
+    echo "🔍 Debug: using BRANCH env var = '$BRANCH'"
     echo "$BRANCH"
     return
   fi
   
   # Default fallback
+  echo "🔍 Debug: using default branch"
   echo "Optimizing-Code"
 }
 
@@ -46,6 +52,8 @@ REPO_URL="${REPO_URL:-https://raw.githubusercontent.com/danryan06/wifi-dashboard
 # Log the detected branch for debugging
 echo "🔍 Detected branch: $DETECTED_BRANCH"
 echo "🔗 Using repository URL: $REPO_URL"
+echo "🔍 REPO_URL length: ${#REPO_URL}"
+echo "🔍 REPO_URL hex dump: $(echo -n "$REPO_URL" | hexdump -C)"
 PI_USER="${PI_USER:-$(getent passwd 1000 | cut -d: -f1 2>/dev/null || echo 'pi')}"
 PI_HOME="/home/$PI_USER"
 VERSION="${VERSION:-v5.1.0-optimized}"
