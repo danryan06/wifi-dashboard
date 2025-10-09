@@ -582,6 +582,11 @@
                     <pre id="netem-status">Loading...</pre>
                 </div>
             </div>
+            
+            <div style="margin-top: 24px; text-align: center;">
+                <button onclick="startAllServices()" class="secondary">🚀 Start All Services</button>
+                <button onclick="checkServiceStatus()" class="secondary">🔍 Check Service Status</button>
+            </div>
         </div>
                 
         <!-- Interfaces Tab -->
@@ -836,25 +841,43 @@
                     interfaceList.innerHTML = interfaces.map(iface => {
                         const status = iface.data.active ? 'online' : 'offline';
                         const ip = iface.data.ip || 'No IP';
+                        const mac = iface.data.mac || 'Unknown';
                         return `
                             <div class="interface-item">
                                 <span class="status-indicator status-${status}"></span>
-                                ${iface.name} (${iface.type}) - ${ip}
+                                ${iface.name} (${iface.type}) - IP: ${ip} | MAC: ${mac}
                             </div>
                         `;
                     }).join('');
                     
                     // Update throughput grid
                     const throughputGrid = document.getElementById('throughput-grid');
-                    throughputGrid.innerHTML = Object.entries(throughput).map(([iface, data]) => `
-                        <div class="throughput-item">
-                            <div class="throughput-interface">${iface}</div>
+                    const throughputEntries = Object.entries(throughput);
+                    
+                    // Calculate totals
+                    const totalDownload = throughputEntries.reduce((sum, [_, data]) => sum + (data.download || 0), 0);
+                    const totalUpload = throughputEntries.reduce((sum, [_, data]) => sum + (data.upload || 0), 0);
+                    
+                    throughputGrid.innerHTML = [
+                        // Totals card
+                        `<div class="throughput-item" style="border: 2px solid var(--accent); background: rgba(76, 175, 80, 0.1);">
+                            <div class="throughput-interface" style="color: var(--accent); font-weight: bold;">TOTAL</div>
                             <div class="throughput-stats">
-                                <div>↓ ${data.download || 0} Mbps</div>
-                                <div>↑ ${data.upload || 0} Mbps</div>
+                                <div>↓ ${totalDownload.toFixed(2)} Mbps</div>
+                                <div>↑ ${totalUpload.toFixed(2)} Mbps</div>
                             </div>
-                        </div>
-                    `).join('');
+                        </div>`,
+                        // Individual interface cards
+                        ...throughputEntries.map(([iface, data]) => `
+                            <div class="throughput-item">
+                                <div class="throughput-interface">${iface}</div>
+                                <div class="throughput-stats">
+                                    <div>↓ ${data.download || 0} Mbps</div>
+                                    <div>↑ ${data.upload || 0} Mbps</div>
+                                </div>
+                            </div>
+                        `)
+                    ].join('');
                     
                     // Update active connections
                     const activeConnections = document.getElementById('active-connections');
@@ -1372,11 +1395,92 @@
             }
         }
         
+        // Check and start services if needed
+        async function checkAndStartServices() {
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const serviceStatus = data.service_status || {};
+                    const services = ['wired-test', 'wifi-good', 'wifi-bad'];
+                    
+                    // Check if any services are not active
+                    const inactiveServices = services.filter(service => {
+                        const status = serviceStatus[service.replace('-', '_')] || 'unknown';
+                        return status !== 'active';
+                    });
+                    
+                    if (inactiveServices.length > 0) {
+                        console.log('Some services are not active:', inactiveServices);
+                        showFlashMessage(`Some services are not running: ${inactiveServices.join(', ')}. Check the Services tab to start them.`, 'warning');
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to check service status:', error);
+            }
+        }
+        
+        // Start all services
+        async function startAllServices() {
+            try {
+                showFlashMessage('Starting all services...', 'info');
+                
+                const services = ['eth0', 'wlan0', 'wlan1'];
+                for (const service of services) {
+                    const formData = new FormData();
+                    formData.append('interface', service);
+                    formData.append('action', 'start');
+                    
+                    await fetch('/traffic_action', {
+                        method: 'POST',
+                        body: formData
+                    });
+                }
+                
+                showFlashMessage('All services start initiated. Check logs for progress.', 'success');
+                
+                // Refresh status after a delay
+                setTimeout(() => {
+                    loadStatusData();
+                }, 3000);
+                
+            } catch (error) {
+                console.error('Failed to start services:', error);
+                showFlashMessage('Failed to start services', 'error');
+            }
+        }
+        
+        // Check service status
+        async function checkServiceStatus() {
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const serviceStatus = data.service_status || {};
+                    const services = [
+                        { name: 'wifi-dashboard', status: serviceStatus.dashboard || 'unknown' },
+                        { name: 'wired-test', status: serviceStatus.wired || 'unknown' },
+                        { name: 'wifi-good', status: serviceStatus.good || 'unknown' },
+                        { name: 'wifi-bad', status: serviceStatus.bad || 'unknown' }
+                    ];
+                    
+                    const statusText = services.map(s => `${s.name}: ${s.status}`).join('\n');
+                    showFlashMessage(`Service Status:\n${statusText}`, 'info');
+                }
+            } catch (error) {
+                console.error('Failed to check service status:', error);
+                showFlashMessage('Failed to check service status', 'error');
+            }
+        }
+
         // Initialize dashboard
         document.addEventListener('DOMContentLoaded', () => {
             // Load initial data
             loadStatusData();
             loadCurrentWifiConfig();
+            checkAndStartServices();
             
             // Set up auto-refresh for status
             setInterval(loadStatusData, 30000); // Refresh every 30 seconds
