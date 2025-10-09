@@ -46,7 +46,8 @@ detect_branch() {
   echo "Optimizing-Code"
 }
 
-DETECTED_BRANCH="$(detect_branch)"
+# For now, hardcode to Optimizing-Code branch to fix the URL issue
+DETECTED_BRANCH="Optimizing-Code"
 REPO_URL="${REPO_URL:-https://raw.githubusercontent.com/danryan06/wifi-dashboard/$DETECTED_BRANCH}"
 
 # Log the detected branch for debugging
