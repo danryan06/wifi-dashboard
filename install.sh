@@ -93,7 +93,9 @@ download_to() {
 
   while (( attempt < 3 )); do
     attempt=$(( attempt + 1 ))
-    if curl -fsSL "${REPO_URL:-}/$file" -o "$target"; then
+    local url="${REPO_URL}/${file}"
+    log_info "Downloading from: $url"
+    if curl -fsSL "$url" -o "$target"; then
       return 0
     else
       log_warn "Download attempt $attempt for $file failed, retrying..."
