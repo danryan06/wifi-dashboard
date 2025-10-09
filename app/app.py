@@ -423,6 +423,26 @@ def api_throughput():
             i = io.get(iface)
             s = if_stats.get(iface)
 
+            # Gather IP/MAC details
+            ip_addr = ""
+            mac_addr = ""
+            try:
+                ip_show = subprocess.run(['ip', '-o', '-4', 'addr', 'show', iface], capture_output=True, text=True, timeout=2)
+                if ip_show.returncode == 0 and ip_show.stdout.strip():
+                    # format: 2: eth0    inet 192.168.1.2/24 ...
+                    parts = ip_show.stdout.strip().split()
+                    if len(parts) >= 4:
+                        ip_addr = parts[3].split('/')[0]
+                link_show = subprocess.run(['ip', '-o', 'link', 'show', iface], capture_output=True, text=True, timeout=2)
+                if link_show.returncode == 0 and link_show.stdout:
+                    # look for 'link/ether xx:xx:xx:xx:xx:xx'
+                    for token in link_show.stdout.split():
+                        if token.count(':') == 5:
+                            mac_addr = token
+                            break
+            except Exception:
+                pass
+
             out[iface] = {
                 "active": bool(s and s.isup),
                 "download": round(float(d["download"]), 2),  # Mbps
@@ -431,6 +451,8 @@ def api_throughput():
                 "tx_packets": int(getattr(i, "packets_sent", 0) or 0),
                 "total_download": round(float(d["total_download"]), 1),  # MB
                 "total_upload": round(float(d["total_upload"]), 1),  # MB
+                "ip": ip_addr,
+                "mac": mac_addr,
             }
 
         return jsonify({

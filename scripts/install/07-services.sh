@@ -63,7 +63,7 @@ User=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
 Environment=INTERFACE=${WIRED_IFACE}
 Environment=HOSTNAME=CNXNMist-Wired
-ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/wired_simulation.sh
+ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/wired_simulation.sh
 Restart=always
 RestartSec=15
 TimeoutStartSec=60
@@ -93,7 +93,7 @@ Environment=HOSTNAME=CNXNMist-WiFiGood
 Environment=WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood
 # Short delay to ensure wired is established
 ExecStartPre=/bin/sleep 10
-ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/connect_and_curl.sh
+ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/connect_and_curl.sh
 Restart=always
 RestartSec=20
 TimeoutStartSec=90
@@ -124,7 +124,7 @@ Environment=HOSTNAME=CNXNMist-WiFiBad
 Environment=WIFI_BAD_HOSTNAME=CNXNMist-WiFiBad
 # Short delay to ensure wired is established
 ExecStartPre=/bin/sleep 5
-ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/fail_auth_loop.sh
+ExecStart=/usr/bin/env bash ${DASHBOARD_DIR}/scripts/traffic/fail_auth_loop.sh
 Restart=always
 RestartSec=30
 TimeoutStartSec=60
@@ -135,16 +135,26 @@ EOF
 fi
 
 # Reload and enable services
-log_info "Enabling services..."
+log_info "Enabling and starting services..."
 systemctl daemon-reload
 
+# Enable at boot
 systemctl enable wifi-dashboard.service
 systemctl enable wired-test.service
 systemctl enable wifi-good.service
-
 if [[ -n "${BAD_IFACE}" && "${BAD_IFACE}" != "none" ]]; then
     systemctl enable wifi-bad.service
 fi
 
-log_info "✅ Service creation completed"
-log_info "Services use simple systemd ordering - no locks, no artificial delays"
+# Start immediately in the correct order
+systemctl start wifi-dashboard.service || true
+systemctl start wired-test.service || true
+if [[ -n "${BAD_IFACE}" && "${BAD_IFACE}" != "none" ]]; then
+    /bin/sleep 5
+    systemctl start wifi-bad.service || true
+fi
+/bin/sleep 5
+systemctl start wifi-good.service || true
+
+log_info "✅ Service creation completed and services started"
+log_info "Startup order: wired-test → wifi-bad (optional) → wifi-good"
