@@ -9,12 +9,12 @@ log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
 
 log_info "Installing traffic generation scripts..."
 
-# Create scripts directory
-mkdir -p "$PI_HOME/wifi_test_dashboard/scripts"
+# Create scripts directory structure
+mkdir -p "$PI_HOME/wifi_test_dashboard/scripts/traffic"
 
 # Download main traffic generator
 log_info "Installing main traffic generator..."
-if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/scripts/traffic/interface_traffic_generator.sh" -o "$PI_HOME/wifi_test_dashboard/scripts/interface_traffic_generator.sh"; then
+if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/scripts/traffic/interface_traffic_generator.sh" -o "$PI_HOME/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"; then
     log_info "✓ Downloaded interface_traffic_generator.sh"
 else
     log_warn "✗ Failed to download interface_traffic_generator.sh, using existing version..."
@@ -22,13 +22,13 @@ fi
 
 # Download wired simulation script
 log_info "Installing wired simulation script..."
-if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/scripts/traffic/wired_simulation.sh" -o "$PI_HOME/wifi_test_dashboard/scripts/wired_simulation.sh"; then
+if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/scripts/traffic/wired_simulation.sh" -o "$PI_HOME/wifi_test_dashboard/scripts/traffic/wired_simulation.sh"; then
     log_info "✓ Downloaded wired_simulation.sh"
 else
     log_warn "✗ Failed to download wired_simulation.sh, creating basic fallback..."
     
     # Create basic fallback wired simulation script
-    cat > "$PI_HOME/wifi_test_dashboard/scripts/wired_simulation.sh" << 'WIRED_FALLBACK_EOF'
+    cat > "$PI_HOME/wifi_test_dashboard/scripts/traffic/wired_simulation.sh" << 'WIRED_FALLBACK_EOF'
 #!/usr/bin/env bash
 # Basic wired client simulation fallback
 
@@ -58,13 +58,13 @@ fi
 
 # Download Wi-Fi good client script
 log_info "Installing Wi-Fi good client script..."
-if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/scripts/traffic/connect_and_curl.sh" -o "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"; then
+if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/scripts/traffic/connect_and_curl.sh" -o "$PI_HOME/wifi_test_dashboard/scripts/traffic/connect_and_curl.sh"; then
     log_info "✓ Downloaded connect_and_curl.sh"
 else
     log_warn "✗ Failed to download connect_and_curl.sh, creating basic fallback..."
     
     # Create basic fallback Wi-Fi good client script
-    cat > "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh" << 'WIFI_GOOD_FALLBACK_EOF'
+    cat > "$PI_HOME/wifi_test_dashboard/scripts/traffic/connect_and_curl.sh" << 'WIFI_GOOD_FALLBACK_EOF'
 #!/usr/bin/env bash
 # Basic Wi-Fi good client simulation fallback
 
@@ -105,13 +105,13 @@ fi
 
 # Download Wi-Fi bad client script
 log_info "Installing Wi-Fi bad client script..."
-if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/scripts/traffic/fail_auth_loop.sh" -o "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh"; then
+if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/scripts/traffic/fail_auth_loop.sh" -o "$PI_HOME/wifi_test_dashboard/scripts/traffic/fail_auth_loop.sh"; then
     log_info "✓ Downloaded fail_auth_loop.sh"
 else
     log_warn "✗ Failed to download fail_auth_loop.sh, creating basic fallback..."
     
     # Create basic fallback Wi-Fi bad client script
-    cat > "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh" << 'WIFI_BAD_FALLBACK_EOF'
+    cat > "$PI_HOME/wifi_test_dashboard/scripts/traffic/fail_auth_loop.sh" << 'WIFI_BAD_FALLBACK_EOF'
 #!/usr/bin/env bash
 # Basic Wi-Fi bad client simulation fallback
 
@@ -184,10 +184,10 @@ chown -R "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/scripts"
 log_info "Verifying traffic generation scripts..."
 
 CRITICAL_SCRIPTS=(
-    "$PI_HOME/wifi_test_dashboard/scripts/interface_traffic_generator.sh"
-    "$PI_HOME/wifi_test_dashboard/scripts/wired_simulation.sh"
-    "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
-    "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh"
+    "$PI_HOME/wifi_test_dashboard/scripts/traffic/interface_traffic_generator.sh"
+    "$PI_HOME/wifi_test_dashboard/scripts/traffic/wired_simulation.sh"
+    "$PI_HOME/wifi_test_dashboard/scripts/traffic/connect_and_curl.sh"
+    "$PI_HOME/wifi_test_dashboard/scripts/traffic/fail_auth_loop.sh"
 )
 
 missing_scripts=0

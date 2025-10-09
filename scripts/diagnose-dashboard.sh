@@ -56,10 +56,10 @@ check_required_files() {
         "$DASHBOARD_DIR/app.py:Flask application"
         "$DASHBOARD_DIR/configs/ssid.conf:SSID configuration"
         "$DASHBOARD_DIR/configs/settings.conf:System settings"
-        "$DASHBOARD_DIR/scripts/wired_simulation.sh:Wired client script"
-        "$DASHBOARD_DIR/scripts/connect_and_curl.sh:Wi-Fi good client"
-        "$DASHBOARD_DIR/scripts/fail_auth_loop.sh:Wi-Fi bad client"
-        "$DASHBOARD_DIR/scripts/interface_traffic_generator.sh:Traffic generator"
+        "$DASHBOARD_DIR/scripts/traffic/wired_simulation.sh:Wired client script"
+        "$DASHBOARD_DIR/scripts/traffic/connect_and_curl.sh:Wi-Fi good client"
+        "$DASHBOARD_DIR/scripts/traffic/fail_auth_loop.sh:Wi-Fi bad client"
+        "$DASHBOARD_DIR/scripts/traffic/interface_traffic_generator.sh:Traffic generator"
     )
     
     for file_desc in "${required_files[@]}"; do
