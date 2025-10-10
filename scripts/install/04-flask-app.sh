@@ -9,13 +9,14 @@ log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
 log_info "Installing Flask application..."
 
 # Download the Flask application directly from the repository
-if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/app/app.py" -o "$PI_HOME/wifi_test_dashboard/app.py"; then
+mkdir -p "$PI_HOME/wifi_test_dashboard/app"
+if curl -sSL --max-time 30 --retry 3 "${REPO_URL}/app/app.py" -o "$PI_HOME/wifi_test_dashboard/app/app.py"; then
     log_info "✓ Downloaded Flask application"
 else
     log_info "✗ Failed to download Flask application, creating locally..."
     
     # Fallback: Create the Flask application locally
-    cat > "$PI_HOME/wifi_test_dashboard/app.py" <<'FLASK_APP_EOF'
+    cat > "$PI_HOME/wifi_test_dashboard/app/app.py" <<'FLASK_APP_EOF'
 from flask import Flask, render_template, request, redirect, jsonify, flash
 import os
 import subprocess
@@ -27,9 +28,10 @@ app.secret_key = 'wifi-test-dashboard-secret-key'
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(BASE_DIR, "configs", "ssid.conf")
-SETTINGS_FILE = os.path.join(BASE_DIR, "configs", "settings.conf")
-LOG_DIR = os.path.join(BASE_DIR, "logs")
+ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
+CONFIG_FILE = os.path.join(ROOT_DIR, "configs", "ssid.conf")
+SETTINGS_FILE = os.path.join(ROOT_DIR, "configs", "settings.conf")
+LOG_DIR = os.path.join(ROOT_DIR, "logs")
 
 # Setup logging
 logging.basicConfig(
@@ -396,7 +398,7 @@ fi
 chown "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/app.py"
 
 # Verify the Flask app can be imported
-if sudo -u "$PI_USER" python3 -c "import sys; sys.path.insert(0, '$PI_HOME/wifi_test_dashboard'); import app" 2>/dev/null; then
+if sudo -u "$PI_USER" python3 -c "import sys; sys.path.insert(0, '$PI_HOME/wifi_test_dashboard/app'); import app" 2>/dev/null; then
     log_info "✓ Flask application verified successfully"
 else
     log_info "⚠ Flask application verification had issues (may still work)"

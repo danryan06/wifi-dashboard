@@ -46,8 +46,8 @@ detect_branch() {
   echo "Optimizing-Code"
 }
 
-# For now, hardcode to Optimizing-Code branch to fix the URL issue
-DETECTED_BRANCH="Optimizing-Code"
+# Detect branch dynamically (falls back to Optimizing-Code)
+DETECTED_BRANCH="$(detect_branch)"
 REPO_URL="${REPO_URL:-https://raw.githubusercontent.com/danryan06/wifi-dashboard/$DETECTED_BRANCH}"
 
 # Log the detected branch for debugging
@@ -325,7 +325,7 @@ validate_installation() {
 
   # Check critical files
   local need_files=(
-    "$PI_HOME/wifi_test_dashboard/app.py"
+    "$PI_HOME/wifi_test_dashboard/app/app.py"
     "$PI_HOME/wifi_test_dashboard/scripts/traffic/connect_and_curl.sh"
     "$PI_HOME/wifi_test_dashboard/scripts/traffic/fail_auth_loop.sh"
     "$PI_HOME/wifi_test_dashboard/scripts/traffic/wired_simulation.sh"
