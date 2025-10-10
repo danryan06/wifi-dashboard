@@ -8,7 +8,7 @@ from datetime import datetime
 import threading
 import psutil
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder=os.path.join(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")), "templates"))
 app.secret_key = 'wifi-test-dashboard-secret-key'
 
 # =============================================================================
