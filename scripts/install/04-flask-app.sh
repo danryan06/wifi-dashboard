@@ -395,7 +395,7 @@ FLASK_APP_EOF
 fi
 
 # Ensure proper ownership
-chown "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/app.py"
+chown "$PI_USER:$PI_USER" "$PI_HOME/wifi_test_dashboard/app/app.py"
 
 # Verify the Flask app can be imported
 if sudo -u "$PI_USER" python3 -c "import sys; sys.path.insert(0, '$PI_HOME/wifi_test_dashboard/app'); import app" 2>/dev/null; then
