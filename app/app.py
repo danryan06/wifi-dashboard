@@ -143,14 +143,24 @@ def get_throughput_stats():
 # =============================================================================
 # LOGGING SETUP
 # =============================================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, "main.log")),
-        logging.StreamHandler()
-    ]
-)
+# Ensure log directory exists to avoid startup failures
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+except Exception:
+    pass
+
+try:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(os.path.join(LOG_DIR, "main.log")),
+            logging.StreamHandler()
+        ]
+    )
+except Exception:
+    # Fallback to console-only logging if file handler fails
+    logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def log_action(msg):
