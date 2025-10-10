@@ -17,22 +17,9 @@ trap 'echo -e "\033[0;31m[ERROR]\033[0m ❌ Installation failed at line $LINENO.
 # Config
 # ───────────────────────────────────────────────────────────────────────────────
 # Auto-detect the branch from the curl command that downloaded this script
+# Simplified: allow BRANCH env var override; default to Optimizing-Code
 detect_branch() {
-  # Be quiet and robust – only print the branch name to stdout
-  set +e
-  set +o pipefail 2>/dev/null || true
-  local curl_cmd detected
-  curl_cmd=$(ps aux 2>/dev/null | grep -E "curl.*githubusercontent.*wifi-dashboard.*install\.sh" | grep -v grep | head -1)
-  if [[ -n "$curl_cmd" ]] && [[ "$curl_cmd" =~ githubusercontent\.com/[^/]+/[^/]+/([^/]+)/install\.sh ]]; then
-    detected="${BASH_REMATCH[1]}"
-    printf "%s" "$detected"
-    return 0
-  fi
-  if [[ -n "${BRANCH:-}" ]]; then
-    printf "%s" "$BRANCH"
-    return 0
-  fi
-  printf "%s" "Optimizing-Code"
+  if [[ -n "${BRANCH:-}" ]]; then printf "%s" "$BRANCH"; else printf "%s" "Optimizing-Code"; fi
 }
 
 # Detect branch dynamically (falls back to Optimizing-Code)
