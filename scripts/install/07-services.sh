@@ -37,7 +37,7 @@ Type=simple
 User=${PI_USER}
 WorkingDirectory=${DASHBOARD_DIR}
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 ${DASHBOARD_DIR}/app.py
+ExecStart=/usr/bin/python3 ${DASHBOARD_DIR}/app/app.py
 Restart=always
 RestartSec=10
 
