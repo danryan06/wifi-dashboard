@@ -186,6 +186,9 @@ def after_request(response):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    # Allow UI to cache static assets but not API
+    if not request.path.startswith('/api/') and request.path.startswith('/static'):
+        response.headers.setdefault('Cache-Control', 'public, max-age=300')
     return response
 
 # =============================================================================
@@ -643,6 +646,12 @@ def update_wifi():
             except Exception as e:
                 logger.error(f"Error restarting services: {e}")
                 flash("Configuration saved but failed to restart services", "warning")
+            # Extra: write a one-liner to main log for confirmation
+            try:
+                with open(os.path.join(LOG_DIR, 'main.log'), 'a') as f:
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] UI updated SSID to {new_ssid}\n")
+            except Exception:
+                pass
         else:
             flash("Failed to update configuration", "error")
 
