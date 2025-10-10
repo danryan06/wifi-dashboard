@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, redirect, jsonify, flash
+from jinja2 import ChoiceLoader, FileSystemLoader
 import os
 import subprocess
 import logging
@@ -8,7 +9,15 @@ from datetime import datetime
 import threading
 import psutil
 
-app = Flask(__name__, template_folder=os.path.join(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")), "templates"))
+templates_top = os.path.join(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")), "templates")
+templates_local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+app = Flask(__name__, template_folder=templates_top)
+# Be resilient to template location differences across installers
+app.jinja_loader = ChoiceLoader([
+    FileSystemLoader(templates_top),
+    FileSystemLoader(templates_local),
+    app.jinja_loader,
+])
 app.secret_key = 'wifi-test-dashboard-secret-key'
 
 # =============================================================================
