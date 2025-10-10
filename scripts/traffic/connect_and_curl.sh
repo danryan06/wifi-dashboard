@@ -240,7 +240,8 @@ check_wifi_interface() {
 
 get_current_bssid() {
   local bssid=""
-  bssid="$($SUDO nmcli -t -f ACTIVE,BSSID dev wifi | awk -F: '$1=="yes"{print $2; exit}')" || true
+  # Use a custom separator to avoid BSSID colons breaking parsing
+  bssid="$($SUDO nmcli -t --separator '|' -f ACTIVE,BSSID dev wifi | awk -F'|' '$1=="yes"{print $2; exit}')" || true
   
   if [[ -z "$bssid" || ! "$bssid" =~ : ]]; then
     bssid="$(iw dev "$INTERFACE" link 2>/dev/null | awk '/Connected to/{print $3; exit}')" || true
@@ -265,18 +266,19 @@ discover_bssids_for_ssid() {
   
   # Debug: Show all available networks
   log_msg "📡 Available networks:"
-  $SUDO nmcli -t -f SSID,BSSID,SIGNAL,SECURITY dev wifi 2>/dev/null | while IFS=: read -r ssid bssid signal security; do
-    [[ -n "$ssid" ]] && log_msg "   $ssid ($bssid) - ${signal}dBm - $security"
-  done
+  $SUDO nmcli -t --separator '|' -f SSID,BSSID,SIGNAL,SECURITY dev wifi 2>/dev/null | \
+    while IFS='|' read -r ssid bssid signal security; do
+      [[ -n "$ssid" ]] && log_msg "   $ssid ($bssid) - ${signal}dBm - $security"
+    done
   
   # Look for our specific SSID
-  while IFS=: read -r active bssid ssid signal; do
+  while IFS='|' read -r active bssid ssid signal; do
     [[ "$ssid" != "$SSID" ]] && continue
     bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
     [[ "$bssid" =~ : ]] || continue
     BSSID_SIGNALS["$bssid"]="$signal"
     log_msg "   Found BSSID: $bssid (signal: ${signal}dBm)"
-  done < <($SUDO nmcli -t -f ACTIVE,BSSID,SSID,SIGNAL dev wifi 2>/dev/null)
+  done < <($SUDO nmcli -t --separator '|' -f ACTIVE,BSSID,SSID,SIGNAL dev wifi 2>/dev/null)
   
   local count="${#BSSID_SIGNALS[@]}"
   if (( count > 0 )); then
@@ -290,7 +292,7 @@ discover_bssids_for_ssid() {
     log_msg "🔍 Debug: Checking if SSID exists with different case or spacing..."
     
     # Try case-insensitive search
-    while IFS=: read -r active bssid ssid signal; do
+    while IFS='|' read -r active bssid ssid signal; do
       if [[ "${ssid,,}" == "${SSID,,}" ]]; then
         log_msg "   Found case-insensitive match: '$ssid' (expected: '$SSID')"
         bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
@@ -298,7 +300,7 @@ discover_bssids_for_ssid() {
         BSSID_SIGNALS["$bssid"]="$signal"
         log_msg "   Added BSSID: $bssid (signal: ${signal}dBm)"
       fi
-    done < <($SUDO nmcli -t -f ACTIVE,BSSID,SSID,SIGNAL dev wifi 2>/dev/null)
+    done < <($SUDO nmcli -t --separator '|' -f ACTIVE,BSSID,SSID,SIGNAL dev wifi 2>/dev/null)
     
     local final_count="${#BSSID_SIGNALS[@]}"
     if (( final_count > 0 )); then
