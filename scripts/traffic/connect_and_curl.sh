@@ -180,24 +180,15 @@ read_wifi_config() {
     log_msg "Config file not found: $CONFIG_FILE"
     return 1
   fi
-  
-  mapfile -t lines < "$CONFIG_FILE"
-  if [[ ${#lines[@]} -lt 2 ]]; then
-    log_msg "Config incomplete (need SSID + password)"
-    return 1
-  fi
-  
-  local temp_ssid="${lines[0]}" temp_password="${lines[1]}"
-  temp_ssid=$(echo "$temp_ssid" | xargs)
-  temp_password=$(echo "$temp_password" | xargs)
-  
-  if [[ -z "$temp_ssid" || -z "$temp_password" ]]; then
+  # Read two lines, strip CR and whitespace, remove surrounding quotes
+  SSID=$(sed -n '1p' "$CONFIG_FILE" 2>/dev/null | tr -d '\r' | xargs)
+  PASSWORD=$(sed -n '2p' "$CONFIG_FILE" 2>/dev/null | tr -d '\r' | xargs)
+  SSID=${SSID%"}; SSID=${SSID#"}
+  PASSWORD=${PASSWORD%"}; PASSWORD=${PASSWORD#"}
+  if [[ -z "$SSID" || -z "$PASSWORD" ]]; then
     log_msg "SSID or password empty"
     return 1
   fi
-  
-  SSID="$temp_ssid"
-  PASSWORD="$temp_password"
   export SSID PASSWORD
   log_msg "Wi-Fi config loaded (SSID: '$SSID')"
   return 0
@@ -264,21 +255,22 @@ discover_bssids_for_ssid() {
   $SUDO nmcli dev wifi rescan >/dev/null 2>&1 || true
   sleep 3  # Give time for scan to complete
   
-  # Debug: Show all available networks
+  # Debug: Show all available networks (handle escaped colons)
   log_msg "📡 Available networks:"
-  $SUDO nmcli -t --separator '|' -f SSID,BSSID,SIGNAL,SECURITY dev wifi 2>/dev/null | \
-    while IFS='|' read -r ssid bssid signal security; do
-      [[ -n "$ssid" ]] && log_msg "   $ssid ($bssid) - ${signal}dBm - $security"
+  $SUDO nmcli -t -f SSID,BSSID,SIGNAL,SECURITY dev wifi list ifname "$INTERFACE" 2>/dev/null | \
+    while IFS=':' read -r ssid bssid signal security; do
+      [[ -n "$ssid" ]] && log_msg "   ${ssid//\\:/:} (${bssid//\\:/:}) - ${signal}dBm - ${security}"
     done
   
   # Look for our specific SSID
-  while IFS='|' read -r active bssid ssid signal; do
+  while IFS=':' read -r active bssid ssid signal; do
+    ssid=${ssid//\\:/:}
     [[ "$ssid" != "$SSID" ]] && continue
-    bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
+    bssid="$(echo "${bssid//\\:/:}" | tr 'a-f' 'A-F')"
     [[ "$bssid" =~ : ]] || continue
     BSSID_SIGNALS["$bssid"]="$signal"
     log_msg "   Found BSSID: $bssid (signal: ${signal}dBm)"
-  done < <($SUDO nmcli -t --separator '|' -f ACTIVE,BSSID,SSID,SIGNAL dev wifi 2>/dev/null)
+  done < <($SUDO nmcli -t -f ACTIVE,BSSID,SSID,SIGNAL dev wifi list ifname "$INTERFACE" 2>/dev/null)
   
   local count="${#BSSID_SIGNALS[@]}"
   if (( count > 0 )); then
@@ -292,15 +284,16 @@ discover_bssids_for_ssid() {
     log_msg "🔍 Debug: Checking if SSID exists with different case or spacing..."
     
     # Try case-insensitive search
-    while IFS='|' read -r active bssid ssid signal; do
-      if [[ "${ssid,,}" == "${SSID,,}" ]]; then
+    while IFS=':' read -r active bssid ssid signal; do
+      local s_unesc=${ssid//\\:/:}
+      if [[ "${s_unesc,,}" == "${SSID,,}" ]]; then
         log_msg "   Found case-insensitive match: '$ssid' (expected: '$SSID')"
-        bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
+        bssid="$(echo "${bssid//\\:/:}" | tr 'a-f' 'A-F')"
         [[ "$bssid" =~ : ]] || continue
         BSSID_SIGNALS["$bssid"]="$signal"
         log_msg "   Added BSSID: $bssid (signal: ${signal}dBm)"
       fi
-    done < <($SUDO nmcli -t --separator '|' -f ACTIVE,BSSID,SSID,SIGNAL dev wifi 2>/dev/null)
+    done < <($SUDO nmcli -t -f ACTIVE,BSSID,SSID,SIGNAL dev wifi list ifname "$INTERFACE" 2>/dev/null)
     
     local final_count="${#BSSID_SIGNALS[@]}"
     if (( final_count > 0 )); then

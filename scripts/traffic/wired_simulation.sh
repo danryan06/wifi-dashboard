@@ -213,6 +213,7 @@ generate_download_traffic() {
         (
             local url="${DOWNLOAD_URLS[$((RANDOM % ${#DOWNLOAD_URLS[@]}))]}"
             local tmp_file="/tmp/wired_download_${i}_$$"
+            log_msg "↓ Download $i: $url (target ${DOWNLOAD_SIZE} bytes)"
             
             if timeout 180 curl --interface "$INTERFACE" \
                    --connect-timeout 15 \
@@ -225,13 +226,16 @@ generate_download_traffic() {
                 if [[ -f "$tmp_file" ]]; then
                     local bytes
                     bytes=$(stat -c%s "$tmp_file" 2>/dev/null || stat -f%z "$tmp_file" 2>/dev/null || echo 0)
+                    log_msg "✓ Download $i complete: ${bytes} bytes"
                     echo "$bytes"  # Return bytes to parent
                     rm -f "$tmp_file"
                 else
+                    log_msg "✗ Download $i produced no file"
                     echo "0"
                 fi
             else
                 rm -f "$tmp_file"
+                log_msg "✗ Download $i failed"
                 echo "0"
             fi
         ) &
@@ -267,6 +271,7 @@ generate_upload_traffic() {
             
             # Create upload data
             dd if=/dev/urandom of="$upload_data" bs=1M count=$(( UPLOAD_SIZE / 1048576 )) 2>/dev/null
+            log_msg "↑ Upload $i: ${UPLOAD_SIZE} bytes to httpbin"
             
             if timeout 120 curl --interface "$INTERFACE" \
                     --connect-timeout 15 \
@@ -278,7 +283,7 @@ generate_upload_traffic() {
                     --data-binary "@$upload_data" 2>/dev/null; then
                 log_msg "✅ Upload $i completed"
             else
-                log_msg "⚠️ Upload $i failed"
+                log_msg "✗ Upload $i failed"
             fi
             
             rm -f "$upload_data"
