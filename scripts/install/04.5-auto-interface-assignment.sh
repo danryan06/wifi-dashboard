@@ -207,15 +207,10 @@ if [[ -f "$PI_HOME/wifi_test_dashboard/configs/settings.conf" ]]; then
     sed -i "s/WIFI_GOOD_INTERFACE=.*/WIFI_GOOD_INTERFACE=$good_client_iface/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
     sed -i "s/WIFI_BAD_INTERFACE=.*/WIFI_BAD_INTERFACE=${bad_client_iface:-wlan1}/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
     
-    # Update hostnames based on capabilities
-    if [[ "${interface_caps[$good_client_iface]}" == *"dualband"* ]]; then
-        sed -i "s/WIFI_GOOD_HOSTNAME=.*/WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood-5G/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
-    else
-        sed -i "s/WIFI_GOOD_HOSTNAME=.*/WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood-2G/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
-    fi
-    
+    # Enforce canonical hostnames (no band suffixes)
+    sed -i "s/WIFI_GOOD_HOSTNAME=.*/WIFI_GOOD_HOSTNAME=CNXNMist-WiFiGood/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
     if [[ -n "$bad_client_iface" ]]; then
-        sed -i "s/WIFI_BAD_HOSTNAME=.*/WIFI_BAD_HOSTNAME=CNXNMist-WiFiBad-2G/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
+        sed -i "s/WIFI_BAD_HOSTNAME=.*/WIFI_BAD_HOSTNAME=CNXNMist-WiFiBad/" "$PI_HOME/wifi_test_dashboard/configs/settings.conf"
     fi
     
     # Update traffic intensities
@@ -228,21 +223,14 @@ fi
 # Update scripts with correct interface assignments
 log_info "Updating scripts with interface assignments..."
 
-# Update good Wi-Fi client script
+# Update good Wi-Fi client script (interface only; keep hostname canonical via env)
 if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh" ]]; then
     sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$good_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
-    
-    if [[ "${interface_caps[$good_client_iface]}" == *"dualband"* ]]; then
-        sed -i "s/HOSTNAME=\".*\"/HOSTNAME=\"CNXNMist-WiFiGood-5G\"/" "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
-    else
-        sed -i "s/HOSTNAME=\".*\"/HOSTNAME=\"CNXNMist-WiFiGood-2G\"/" "$PI_HOME/wifi_test_dashboard/scripts/connect_and_curl.sh"
-    fi
 fi
 
-# Update bad Wi-Fi client script
+# Update bad Wi-Fi client script (interface only; keep hostname canonical via env)
 if [[ -f "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh" && -n "$bad_client_iface" ]]; then
     sed -i "s/INTERFACE=\"wlan[0-9]\"/INTERFACE=\"$bad_client_iface\"/" "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh"
-    sed -i "s/HOSTNAME=\".*\"/HOSTNAME=\"CNXNMist-WiFiBad-2G\"/" "$PI_HOME/wifi_test_dashboard/scripts/fail_auth_loop.sh"
 fi
 
 # Create installation summary
