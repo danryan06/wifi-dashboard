@@ -421,14 +421,17 @@ get_current_bssid() {
 discover_bssids_for_ssid() {
   declare -gA BSSID_SIGNALS
   BSSID_SIGNALS=()
-  nmcli dev wifi rescan >/dev/null 2>&1 || true
-  # Pull only the SSID we care about
-  while IFS=: read -r active bssid ssid signal; do
+  # Force a rescan on the target interface
+  $SUDO nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1 || true
+  # Use field order that lets us read the colon-containing BSSID as the remainder
+  while IFS=: read -r active ssid signal bssid; do
+    # Only consider rows for the target SSID
     [[ "$ssid" != "$SSID" ]] && continue
+    # Normalize BSSID
     bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
     [[ "$bssid" =~ : ]] || continue
     BSSID_SIGNALS["$bssid"]="$signal"
-  done < <(nmcli -t -f ACTIVE,BSSID,SSID,SIGNAL dev wifi 2>/dev/null)
+  done < <($SUDO nmcli -t -f ACTIVE,SSID,SIGNAL,BSSID dev wifi 2>/dev/null)
   # Log what we found
   local count="${#BSSID_SIGNALS[@]}"
   if (( count > 0 )); then
