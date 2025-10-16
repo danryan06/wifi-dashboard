@@ -689,6 +689,14 @@ select_roaming_target() {
 perform_roaming() {
   local target_bssid="$1" ssid="$2" password="$3"
 
+  log_msg "🚦 Roam attempt: current $(get_current_bssid) -> target $target_bssid"
+
+  # 1) Preferred: use connect_locked_bssid which tries direct and profile-based pin
+  if connect_locked_bssid "$target_bssid" "$ssid" "$password"; then
+    log_msg "✅ Roam succeeded via connect_locked_bssid to $target_bssid"
+    return 0
+  fi
+
   # Identify the active connection profile for this interface
   local active_con
   active_con="$($SUDO nmcli -t -f NAME,DEVICE,TYPE,ACTIVE connection show --active 2>/dev/null | awk -F: -v ifn="$INTERFACE" '$2==ifn && $3=="wifi" && $4=="yes"{print $1; exit}')"
