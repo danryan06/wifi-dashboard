@@ -220,8 +220,8 @@ verify_device_identity() {
     log_msg "   Expected Hostname: $expected_hostname"
     local bssid="" ssid=""
     if $SUDO nmcli device show "$interface" 2>/dev/null | grep -q "connected"; then
-        bssid=$($SUDO nmcli -t -f active,bssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}' || echo "unknown")
-        ssid=$($SUDO nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}' || echo "unknown")
+        ssid="$(current_ssid || echo "unknown")"
+        bssid="$(get_current_bssid || echo "unknown")"
         log_msg "   Connected SSID: $ssid"
         log_msg "   Connected BSSID: $bssid"
     else
@@ -689,20 +689,49 @@ select_roaming_target() {
 perform_roaming() {
   local target_bssid="$1" ssid="$2" password="$3"
 
-  # Be explicit with NM so it doesn't outsmart us
-  nmcli con modify "$ssid" 802-11-wireless.bssid "$target_bssid" 2>/dev/null || true
-  nmcli con modify "$ssid" 802-11-wireless.mac-address "$WIFI_MAC" 2>/dev/null || true
-  nmcli con modify "$ssid" 802-11-wireless.cloned-mac-address "$WIFI_MAC" 2>/dev/null || true
-  nmcli con modify "$ssid" 802-11-wireless.powersave 2 2>/dev/null || true      # disable PS
-  nmcli set wifi.scan-rand-mac-address no 2>/dev/null || true
+  # Identify the active connection profile for this interface
+  local active_con
+  active_con="$($SUDO nmcli -t -f NAME,DEVICE,TYPE,ACTIVE connection show --active 2>/dev/null | awk -F: -v ifn="$INTERFACE" '$2==ifn && $3=="wifi" && $4=="yes"{print $1; exit}')"
+  [[ -z "$active_con" ]] && active_con="$ssid"
 
-  # Tear down cleanly and pin to target
-  nmcli dev disconnect "$INTERFACE" >/dev/null 2>&1 || true
+  # Configure the connection to pin BSSID; disable powersave and MAC randomization for stability
+  $SUDO nmcli connection modify "$active_con" 802-11-wireless.bssid "$target_bssid" 2>/dev/null || true
+  $SUDO nmcli connection modify "$active_con" 802-11-wireless.powersave 2 2>/dev/null || true
+  $SUDO nmcli set wifi.scan-rand-mac-address no 2>/dev/null || true
+
+  # Bounce the connection to apply the BSSID pin
+  $SUDO nmcli connection down "$active_con" >/dev/null 2>&1 || true
   sleep 2
+  if $SUDO timeout 45 nmcli --wait 45 connection up "$active_con" ifname "$INTERFACE" >/dev/null 2>&1; then
+    sleep 5
+    local actual_bssid; actual_bssid="$(get_current_bssid)"
+    # Compare case-insensitively
+    if [[ "${actual_bssid^^}" == "${target_bssid^^}" ]]; then
+      log_msg "✅ Roam succeeded to $actual_bssid via profile '$active_con'"
+      return 0
+    else
+      log_msg "⚠️ Roam brought up profile but BSSID mismatch: got ${actual_bssid:-unknown}, wanted $target_bssid"
+    fi
+  else
+    log_msg "❌ Failed to bring up connection '$active_con' with pinned BSSID"
+  fi
 
-  # WPA3-Personal (SAE) reconnect pinned to BSSID
-  # NOTE: --rescan no keeps the selected BSSID
-  nmcli --wait 30 dev wifi connect "$ssid" ifname "$INTERFACE" bssid "$target_bssid" password "$password" --rescan no
+  # Fallback: direct device connect with explicit BSSID
+  log_msg "🔄 Falling back to device connect with BSSID $target_bssid"
+  if $SUDO nmcli --wait 30 dev wifi connect "$ssid" ifname "$INTERFACE" bssid "$target_bssid" password "$password" --rescan no >/dev/null 2>&1; then
+    sleep 5
+    local actual_bssid; actual_bssid="$(get_current_bssid)"
+    if [[ "${actual_bssid^^}" == "${target_bssid^^}" ]]; then
+      log_msg "✅ Roam succeeded via fallback to $actual_bssid"
+      return 0
+    else
+      log_msg "❌ Fallback connect BSSID mismatch: got ${actual_bssid:-unknown}, wanted $target_bssid"
+      return 1
+    fi
+  else
+    log_msg "❌ Fallback device connect failed"
+    return 1
+  fi
 }
 
 connect_to_wifi_with_roaming() {
@@ -767,7 +796,7 @@ manage_roaming() {
       log_msg "🔄 Roaming candidate: $target (SIG $t_sig) vs current $current (SIG ${c_sig})"
 
       set +e
-      if timeout 120 perform_roaming "$target" "$SSID" "$PASSWORD" 2>&1; then
+      if timeout 45 perform_roaming "$target" "$SSID" "$PASSWORD" 2>&1; then
         log_msg "✅ Roaming completed successfully"
         LAST_ROAM_TIME=$(date +%s)
       else
@@ -825,12 +854,12 @@ main_loop() {
         if ! check_wifi_interface; then
             log_msg "❌ Interface check failed, retrying..."; sleep "$REFRESH_INTERVAL"; continue
         fi
-        # Health → roam → traffic
+        # Health → traffic → roam (ensure traffic runs even if roam fails)
         if assess_connection_health; then
-            manage_roaming
             if (( now - last_traffic > 30 )); then
                 generate_realistic_traffic && last_traffic=$now
             fi
+            manage_roaming
         else
             if [[ -n "$SSID" && -n "$PASSWORD" ]]; then
                 log_msg "🔄 Connection needs attention, attempting to reconnect"
