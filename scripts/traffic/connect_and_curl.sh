@@ -338,8 +338,11 @@ MAX_RETRIES="${WIFI_MAX_RETRY_ATTEMPTS:-3}"
 ROAMING_ENABLED="${WIFI_ROAMING_ENABLED:-true}"
 ROAMING_INTERVAL="${WIFI_ROAMING_INTERVAL:-60}"
 ROAMING_SCAN_INTERVAL="${WIFI_ROAMING_SCAN_INTERVAL:-10}"
+# dBm threshold (back-compat for RSSI paths)
 MIN_SIGNAL_THRESHOLD="${WIFI_MIN_SIGNAL_THRESHOLD:--75}"
-ROAMING_SIGNAL_DIFF="${WIFI_ROAMING_SIGNAL_DIFF:-5}"
+# Percent thresholds (nmcli SIGNAL 0-100)
+MIN_SIGNAL_PERCENT="${WIFI_MIN_SIGNAL_PERCENT:-30}"
+ROAMING_SIGNAL_DIFF="${WIFI_ROAMING_SIGNAL_DIFF:-10}"
 WIFI_BAND_PREFERENCE="${WIFI_BAND_PREFERENCE:-both}"
 
 # Traffic config
@@ -441,7 +444,7 @@ discover_bssids_for_ssid() {
   if (( count > 0 )); then
     log_msg "✅ Found ${count} BSSID(s) for '$SSID'"
     for k in "${!BSSID_SIGNALS[@]}"; do
-      log_msg "   Available: $k ($(( BSSID_SIGNALS[$k] * -1 )) dBm)"
+      log_msg "   Available: $k (signal ${BSSID_SIGNALS[$k]}%)"
     done
     return 0
   else
@@ -608,9 +611,9 @@ select_roaming_target() {
   local cur="$1"
   cur="$(echo "$cur" | tr 'a-f' 'A-F')"  # normalize
   local best=""
-  local best_sig=-100
-  # If your SIGNAL is 0–100, ensure these thresholds are in the same scale
-  local current_sig="${BSSID_SIGNALS[$cur]:-$MIN_SIGNAL_THRESHOLD}"
+  local best_sig=-1
+  # nmcli SIGNAL is 0–100 (higher is better). Keep thresholds in percent scale.
+  local current_sig="${BSSID_SIGNALS[$cur]:-0}"
   local now=$(date +%s)
 
   log_msg "📊 Evaluating roaming from BSSID $cur (SIG ${current_sig})"
@@ -620,8 +623,8 @@ select_roaming_target() {
     [[ "$b" == "$cur" ]] && continue
     local s="${BSSID_SIGNALS[$b]}"
 
-    # Only consider BSSIDs above minimum threshold (0–100 scale if using nmcli SIGNAL)
-    if (( s <= MIN_SIGNAL_THRESHOLD )); then
+    # Only consider BSSIDs above minimum threshold (percent scale)
+    if (( s < MIN_SIGNAL_PERCENT )); then
       log_msg "   ⊗ Skipping $b (SIG ${s} - below threshold)"
       continue
     fi
@@ -632,16 +635,16 @@ select_roaming_target() {
       if (( s > best_sig )); then
         best_sig=$s
         best="$b"
-        log_msg "   ✓ Better candidate: $b (SIG ${s}, +${signal_improvement})"
+        log_msg "   ✓ Better candidate: $b (SIG ${s}%, +${signal_improvement})"
       fi
     else
-      log_msg "   → Candidate $b (SIG ${s}, +${signal_improvement}) - below +${ROAMING_SIGNAL_DIFF} threshold"
+      log_msg "   → Candidate $b (SIG ${s}%, +${signal_improvement}) - below +${ROAMING_SIGNAL_DIFF}% threshold"
     fi
   done
 
   # If we found a significantly better signal, use it
   if [[ -n "$best" ]]; then
-    log_msg "🎯 Selected signal-based roaming target: $best (SIG ${best_sig})"
+    log_msg "🎯 Selected signal-based roaming target: $best (SIG ${best_sig}%)"
     echo "$best"
     return 0
   fi
@@ -657,9 +660,9 @@ select_roaming_target() {
       for b in "${!BSSID_SIGNALS[@]}"; do
         [[ "$b" == "$cur" ]] && continue
         local s="${BSSID_SIGNALS[$b]}"
-        if (( s > MIN_SIGNAL_THRESHOLD )); then
+        if (( s >= MIN_SIGNAL_PERCENT )); then
           alternatives+=("$b")
-          log_msg "   • Alternative: $b (SIG ${s})"
+          log_msg "   • Alternative: $b (SIG ${s}%)"
         fi
       done
 
