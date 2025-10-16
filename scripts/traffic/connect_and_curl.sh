@@ -413,6 +413,8 @@ get_current_bssid() {
     bssid="$(iw dev "$INTERFACE" link 2>/dev/null | awk '/Connected to/{print $3; exit}')" || true
   fi
   bssid="${bssid//\\n/}"; bssid="${bssid//\\r/}"; bssid="${bssid//\\t/}"
+  # Unescape nmcli's escaped colons (\:) and normalize case
+  bssid="${bssid//\\:/:}"
   bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
   echo "$bssid"
 }
@@ -424,10 +426,12 @@ discover_bssids_for_ssid() {
   # Force a rescan on the target interface
   $SUDO nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1 || true
   # Use field order that lets us read the colon-containing BSSID as the remainder
-  while IFS=: read -r active ssid signal bssid; do
+  while IFS=: read -r active ssid signal bssid_raw; do
     # Only consider rows for the target SSID
     [[ "$ssid" != "$SSID" ]] && continue
     # Normalize BSSID
+    # nmcli escapes colons as \: in -t output; unescape them
+    local bssid="${bssid_raw//\\:/:}"
     bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
     [[ "$bssid" =~ : ]] || continue
     BSSID_SIGNALS["$bssid"]="$signal"
