@@ -107,6 +107,25 @@ fi
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Install/upgrade to ${VERSION}" >> "${MAIN_LOG}"
 chown "${PI_USER}:${PI_USER}" "${MAIN_LOG}" 2>/dev/null || true
 
+# ensure traffic service logs exist with an initial entry so UI never shows empty
+WIFI_GOOD_LOG="${LOG_DIR}/wifi-good.log"
+WIFI_BAD_LOG="${LOG_DIR}/wifi-bad.log"
+WIRED_LOG="${LOG_DIR}/wired.log"
+
+if [[ ! -s "${WIFI_GOOD_LOG}" ]]; then
+  touch "${WIFI_GOOD_LOG}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] WIFI-GOOD: log initialized by installer" >> "${WIFI_GOOD_LOG}"
+fi
+if [[ ! -s "${WIFI_BAD_LOG}" ]]; then
+  touch "${WIFI_BAD_LOG}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] WIFI-BAD: log initialized by installer" >> "${WIFI_BAD_LOG}"
+fi
+if [[ ! -s "${WIRED_LOG}" ]]; then
+  touch "${WIRED_LOG}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] WIRED: log initialized by installer" >> "${WIRED_LOG}"
+fi
+chown "${PI_USER}:${PI_USER}" "${WIFI_GOOD_LOG}" "${WIFI_BAD_LOG}" "${WIRED_LOG}" 2>/dev/null || true
+
 # make sure script files will be executable later steps
 find "${SCRIPTS_DIR}" -type f -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
 

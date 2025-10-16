@@ -104,14 +104,14 @@
         }
         
         .content { 
-            padding: 20px; 
+            padding: 20px;
             max-width: 1400px; 
             margin: 0 auto; 
         }
         
         .card {
             background: var(--card); 
-            border-radius: 12px; 
+            border-radius: 12px;
             padding: 24px; 
             margin-bottom: 24px;
             border: 1px solid var(--border); 
@@ -120,7 +120,7 @@
         
         .card h2 { 
             margin-top: 0; 
-            margin-bottom: 20px; 
+            margin-bottom: 20px;
             color: var(--accent); 
             font-size: 1.4em;
             display: flex;
@@ -403,10 +403,10 @@
         
         .service-status {
             display: inline-block; 
-            padding: 6px 12px; 
+            padding: 6px 12px;
             border-radius: 20px;
             font-size: 0.85em; 
-            font-weight: 600; 
+            font-weight: 600;
             margin-bottom: 16px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -418,13 +418,13 @@
         }
         
         .service-status.inactive { 
-            background: var(--error); 
-            color: white; 
+            background: var(--error);
+            color: white;
         }
         
         .service-status.unknown { 
-            background: var(--warning); 
-            color: black; 
+            background: var(--warning);
+            color: black;
         }
         
         .service-buttons {
@@ -454,7 +454,7 @@
             border-radius: 8px; 
             border-left: 4px solid;
             background: rgba(0,0,0,0.95); 
-            color: white; 
+            color: white;
             animation: slideIn 0.3s ease;
             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
@@ -692,7 +692,7 @@
             transition: all 0.2s ease;
             position: relative;
         }
-
+        
         .interface-assignment-card:hover {
             background: rgba(255,255,255,0.08);
             transform: translateY(-2px);
@@ -854,7 +854,7 @@
             padding: 4px 0;
             color: var(--fg);
         }
-
+        
         .recommendation-list li:before {
             content: "✓ ";
             color: var(--success);
@@ -911,26 +911,26 @@
                 <div class="status-item">
                     <h3>Primary IP Address</h3>
                     <div class="status-value" id="ip-address">Loading...</div>
-                </div>
+                    </div>
                 <div class="status-item">
                     <h3>System Time</h3>
                     <div class="status-value" id="system-time">Loading...</div>
-                </div>
+                    </div>
                 <div class="status-item">
                     <h3>Active Services</h3>
                     <div class="status-value" id="active-services">Loading...</div>
+                    </div>
                 </div>
-            </div>
-            
+                
             <div class="network-info">
                 <h4>Network Interfaces</h4>
                 <div class="interface-list" id="interface-list">Loading...</div>
-            </div>
+                    </div>
             
             <div class="network-info">
                 <h4>📊 Real-Time Throughput</h4>
                 <div class="throughput-grid" id="throughput-grid">Loading...</div>
-            </div>
+                    </div>
             
             <div class="two-column">
                 <div>
@@ -940,10 +940,10 @@
                 <div>
                     <h3>Network Emulation Status</h3>
                     <pre id="netem-status">Loading...</pre>
+                    </div>
                 </div>
             </div>
-        </div>
-
+            
         <!-- Interface Assignments Tab -->
         <div id="interfaces" class="card hidden">
             <h2>🔌 Interface Assignments</h2>
@@ -955,12 +955,12 @@
                 <div style="text-align: center; padding: 40px; color: var(--muted);">
                     <span class="spinner"></span> Loading interface assignments...
                 </div>
-            </div>
-            
+                </div>
+                
             <div class="optimization-info" id="optimization-info" style="margin-top: 24px;">
                 <!-- Optimization recommendations will be loaded here -->
-            </div>
-        </div>
+                    </div>
+                    </div>
 
         <!-- Wi-Fi Config Tab -->
         <div id="wifi" class="card hidden">
@@ -970,7 +970,7 @@
                     <label for="ssid">🏷️ SSID (Network Name)</label>
                     <input id="ssid" name="ssid" type="text" placeholder="Enter Wi-Fi network name" required>
                     <small style="color: var(--muted); font-size: 0.85em;">This will be used for both good and bad client simulations</small>
-                </div>
+                    </div>
                 <div class="form-group">
                     <label for="password">🔐 Password</label>
                     <input id="password" name="password" type="password" placeholder="Enter Wi-Fi password" required>
@@ -979,8 +979,8 @@
                 <button type="submit">💾 Save Configuration</button>
                 <button type="button" onclick="testConnection()" class="secondary">🔍 Test Connection</button>
             </form>
-        </div>
-
+                </div>
+                
         <!-- Network Emulation Tab -->
         <div id="netem" class="card hidden">
             <h2>🌐 Network Emulation (Netem)</h2>
@@ -999,13 +999,13 @@
                         <input name="loss" type="number" step="0.1" min="0" max="100" placeholder="0.0" id="loss-input">
                         <small style="color: var(--muted); font-size: 0.85em;">Simulate unreliable connections</small>
                     </div>
-                </div>
+                    </div>
                 <button type="submit">🌐 Apply Network Conditions</button>
                 <button type="button" onclick="clearNetem()" class="secondary">🗑️ Clear All Conditions</button>
                 <button type="button" onclick="presetNetem('poor')" class="secondary">📶 Poor Connection</button>
                 <button type="button" onclick="presetNetem('mobile')" class="secondary">📱 Mobile Network</button>
             </form>
-        </div>
+                </div>
 
         <!-- Services Tab -->
         <div id="services" class="card hidden">
@@ -1014,8 +1014,8 @@
                 Control individual testing services. Changes take effect immediately.
             </p>
             <div class="service-controls" id="service-controls">Loading...</div>
-        </div>
-
+            </div>
+            
         <!-- Enhanced Logs Tab -->
         <div id="logs" class="card hidden">
             <h2>📋 System Logs</h2>
@@ -1034,8 +1034,8 @@
                         <label for="autoRefreshInterval" style="margin-left:.75rem;">Every</label>
                         <input type="number" id="autoRefreshInterval" min="3" max="60" step="1" value="5" style="width:4rem;" />
                         <span>sec</span>
-                    </div>
-        
+                </div>
+                
                     <div class="log-info">
                         <span id="log-info-text">Select a log to view</span>
                     </div>
@@ -1045,14 +1045,14 @@
                         <button onclick="loadAllLines()" class="secondary">📋 All</button>
                         <button onclick="clearLogView()" class="secondary">🗑️ Clear View</button>
                     </div>
-                </div>
+                    </div>
                 <div class="log-content-wrapper">
                     <div class="log-content" id="log-content">
                         <div class="log-loading">
                             <span class="spinner"></span> Loading logs...
-                        </div>
-                    </div>
                 </div>
+                    </div>
+                    </div>
                 <div class="log-pagination" id="log-pagination">
                     <div class="pagination-info" id="pagination-info">Ready to load logs</div>
                     <div class="pagination-controls">
@@ -1062,8 +1062,8 @@
                     </div>
                 </div>
             </div>
-        </div>
-
+            </div>
+            
         <!-- System Controls Tab -->
         <div id="controls" class="card hidden">
             <h2>🔧 System Controls</h2>
@@ -1215,7 +1215,7 @@
                         displayLogContent(data);
                         updateLogInfo(data);
                         showMessage(`Loaded all ${data.lines_returned} lines`, 'success');
-                    } else {
+                } else {
                         showLogError('Failed to load all lines: ' + data.error);
                     }
                 } else {
@@ -1386,22 +1386,22 @@
     try {
         const response = await fetch('/api/throughput');
         console.log("[updateThroughputStats] Response status:", response.status);
-
-        if (response.ok) {
+                
+                if (response.ok) {
             const data = await response.json();
             console.log("[updateThroughputStats] Response JSON:", data);
 
             if (data.success && data.throughput) {
                 updateThroughputDisplay(data.throughput);
-            } else {
+                } else {
                 console.warn("[updateThroughputStats] Invalid JSON format:", data);
                 showFallbackThroughput();
             }
         } else {
             console.warn("[updateThroughputStats] Fetch failed:", response.status);
             showFallbackThroughput();
-        }
-    } catch (error) {
+                }
+            } catch (error) {
         console.error("[updateThroughputStats] Error:", error);
         showFallbackThroughput();
     }
@@ -1459,7 +1459,7 @@
                     if (stats.active) {
                         statusText = 'ACTIVE';
                         statusClass = 'active';
-                    } else {
+                } else {
                         statusText = 'IDLE';
                         statusClass = 'inactive';
                     }
@@ -1937,6 +1937,6 @@
         if (tgl) tgl.addEventListener('change', startAutoRefresh);
         if (ivl) ivl.addEventListener('change', startAutoRefresh);
     });
-</script>
+    </script>
 </body>
 </html>
