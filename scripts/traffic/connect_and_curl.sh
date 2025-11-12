@@ -367,6 +367,7 @@ PING_TARGETS=("8.8.8.8" "1.1.1.1" "208.67.222.222" "9.9.9.9")
 
 # Global roaming state
 declare -A BSSID_SIGNALS
+declare -A BSSID_SECURITY
 CURRENT_BSSID=""
 LAST_ROAM_TIME=0
 LAST_SCAN_TIME=0
@@ -425,11 +426,13 @@ get_current_bssid() {
 # BSSID discovery
 discover_bssids_for_ssid() {
   declare -gA BSSID_SIGNALS
+  declare -gA BSSID_SECURITY
   BSSID_SIGNALS=()
+  BSSID_SECURITY=()
   # Force a rescan on the target interface
   $SUDO nmcli device wifi rescan ifname "$INTERFACE" >/dev/null 2>&1 || true
   # Use field order that lets us read the colon-containing BSSID as the remainder
-  while IFS=: read -r active ssid signal bssid_raw; do
+  while IFS=: read -r active ssid signal security bssid_raw; do
     # Only consider rows for the target SSID
     [[ "$ssid" != "$SSID" ]] && continue
     # Normalize BSSID
@@ -438,7 +441,8 @@ discover_bssids_for_ssid() {
     bssid="$(echo "$bssid" | tr 'a-f' 'A-F')"
     [[ "$bssid" =~ : ]] || continue
     BSSID_SIGNALS["$bssid"]="$signal"
-  done < <($SUDO nmcli -t -f ACTIVE,SSID,SIGNAL,BSSID dev wifi 2>/dev/null)
+    BSSID_SECURITY["$bssid"]="$security"
+  done < <($SUDO nmcli -t -f ACTIVE,SSID,SIGNAL,SECURITY,BSSID dev wifi 2>/dev/null)
   # Log what we found
   local count="${#BSSID_SIGNALS[@]}"
   if (( count > 0 )); then
@@ -451,6 +455,30 @@ discover_bssids_for_ssid() {
     log_msg "⚠️  No BSSIDs discovered for '$SSID'"
     return 1
   fi
+}
+
+# Return the SECURITY string for a BSSID (e.g., 'WPA2 WPA3 SAE')
+get_bssid_security() {
+  local bssid="$1"
+  echo "${BSSID_SECURITY[$bssid]:-}"
+}
+
+# True if BSSID advertises WPA3-SAE support
+is_bssid_wpa3_sae() {
+  local bssid="$1"
+  local sec; sec="$(get_bssid_security "$bssid")"
+  [[ "$sec" =~ SAE ]]
+}
+
+# Derive 64-hex PSK for WPA2 from SSID + ASCII passphrase
+derive_hex_psk() {
+  local ssid="$1" pass="$2"
+  if ! command -v wpa_passphrase >/dev/null 2>&1; then
+    echo ""
+    return 1
+  fi
+  wpa_passphrase "$ssid" "$pass" \
+    | awk '/^[[:space:]]*psk=/{ if ($0 !~ /#psk=/) { print $2; exit } }'
 }
 
 prune_same_ssid_profiles() {
@@ -485,9 +513,23 @@ connect_locked_bssid() {
 
   log_msg "🔄 Trying profile-based BSSID connection..."
   local profile_name="bssid-lock-$$"
+  # Choose security mode and PSK representation
+  local key_mgmt psk_value hexdigest=""
+  if is_bssid_wpa3_sae "$bssid"; then
+    key_mgmt="sae"
+    psk_value="$psk"          # SAE uses the ASCII passphrase
+  else
+    key_mgmt="wpa-psk"
+    hexdigest="$(derive_hex_psk "$ssid" "$psk" || true)"
+    if [[ -n "$hexdigest" ]]; then
+      psk_value="$hexdigest"  # Prefer 64-hex PSK for WPA2 to avoid SSID derivation ambiguity
+    else
+      psk_value="$psk"        # Fallback to ASCII if derivation unavailable
+    fi
+  fi
   if $SUDO nmcli connection add \
       type wifi con-name "$profile_name" ifname "$INTERFACE" ssid "$ssid" \
-      802-11-wireless.bssid "$bssid" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$psk" \
+      802-11-wireless.bssid "$bssid" wifi-sec.key-mgmt "$key_mgmt" wifi-sec.psk "$psk_value" \
       ipv4.method auto ipv6.method ignore connection.autoconnect no >/dev/null 2>&1; then
     log_msg "✅ Created BSSID-locked profile"
     if $SUDO nmcli --wait 45 connection up "$profile_name" >/dev/null 2>&1; then
@@ -511,14 +553,37 @@ connect_locked_bssid() {
   if $SUDO iw dev "$INTERFACE" connect "$ssid" "$bssid" >/dev/null 2>&1; then
     log_msg "✅ iw dev connect initiated"; sleep 5
     local wpa_conf="/tmp/wpa_roam_$$.conf"
-    cat > "$wpa_conf" << EOF
+    # Build a minimal conf based on security mode
+    if is_bssid_wpa3_sae "$bssid"; then
+      cat > "$wpa_conf" << EOF
 network={
-    ssid="$ssid"
-    psk="$psk"
     bssid=$bssid
+    key_mgmt=SAE
+    psk="$psk"
     scan_ssid=1
 }
 EOF
+    else
+      local hexdigest=""
+      hexdigest="$(derive_hex_psk "$ssid" "$psk" || true)"
+      if [[ -n "$hexdigest" ]]; then
+        cat > "$wpa_conf" << EOF
+network={
+    bssid=$bssid
+    psk=$hexdigest
+    scan_ssid=1
+}
+EOF
+      else
+        cat > "$wpa_conf" << EOF
+network={
+    bssid=$bssid
+    psk="$psk"
+    scan_ssid=1
+}
+EOF
+      fi
+    fi
     if command -v wpa_supplicant >/dev/null 2>&1; then
       if $SUDO wpa_supplicant -i "$INTERFACE" -c "$wpa_conf" -B >/dev/null 2>&1; then
         sleep 8; $SUDO dhclient "$INTERFACE" >/dev/null 2>&1 || true; sleep 3
