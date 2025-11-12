@@ -809,11 +809,31 @@ manage_roaming() {
       local t_sig="${BSSID_SIGNALS[$target]:-unknown}"
       local c_sig="${BSSID_SIGNALS[$current]:-unknown}"
       log_msg "🔄 Roaming candidate: $target (SIG $t_sig) vs current $current (SIG ${c_sig})"
-      if timeout 180 perform_roaming "$target" "$SSID" "$PASSWORD" 2>&1; then
+      # Run roaming attempt with an in-process timeout (supports shell functions)
+      local start_ts now rc=0 max=180 roam_pid
+      start_ts=$(date +%s)
+      ( perform_roaming "$target" "$SSID" "$PASSWORD" ) &
+      roam_pid=$!
+      while kill -0 "$roam_pid" 2>/dev/null; do
+        now=$(date +%s)
+        if (( now - start_ts > max )); then
+          log_msg "⏱️  Roaming timed out (${max}s); terminating roam attempt"
+          kill -TERM "$roam_pid" 2>/dev/null || true
+          sleep 3
+          kill -KILL "$roam_pid" 2>/dev/null || true
+          rc=124
+          break
+        fi
+        sleep 1
+      done
+      if (( rc == 0 )); then
+        wait "$roam_pid"
+        rc=$?
+      fi
+      if (( rc == 0 )); then
         log_msg "✅ Roaming completed successfully"
         LAST_ROAM_TIME=$(date +%s)
       else
-        local rc=$?
         if [[ $rc -eq 124 ]]; then
           log_msg "⏱️  Roaming timed out (180s)"
         else
