@@ -713,7 +713,7 @@ perform_roaming() {
   # Bounce the connection to apply the BSSID pin
   $SUDO nmcli connection down "$active_con" >/dev/null 2>&1 || true
   sleep 2
-  if $SUDO timeout 45 nmcli --wait 45 connection up "$active_con" ifname "$INTERFACE" >/dev/null 2>&1; then
+  if $SUDO nmcli --wait 45 connection up "$active_con" ifname "$INTERFACE" >/dev/null 2>&1; then
     sleep 5
     local actual_bssid; actual_bssid="$(get_current_bssid)"
     # Compare case-insensitively
@@ -807,7 +807,7 @@ manage_roaming() {
       log_msg "🔄 Roaming candidate: $target (SIG $t_sig) vs current $current (SIG ${c_sig})"
 
       set +e
-      if timeout 45 perform_roaming "$target" "$SSID" "$PASSWORD" 2>&1; then
+      if timeout 180 perform_roaming "$target" "$SSID" "$PASSWORD" 2>&1; then
         log_msg "✅ Roaming completed successfully"
         LAST_ROAM_TIME=$(date +%s)
       else
