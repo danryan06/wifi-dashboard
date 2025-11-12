@@ -519,15 +519,19 @@ network={
     scan_ssid=1
 }
 EOF
-    if $SUDO wpa_supplicant -i "$INTERFACE" -c "$wpa_conf" -B >/dev/null 2>&1; then
-      sleep 8; $SUDO dhclient "$INTERFACE" >/dev/null 2>&1 || true; sleep 3
-      local actual_bssid; actual_bssid="$(get_current_bssid)"
-      rm -f "$wpa_conf"; pkill -f "wpa_supplicant.*$INTERFACE" || true
-      if [[ "$actual_bssid" == "${bssid,,}" ]]; then
-        log_msg "✅ iw+wpa_supplicant BSSID connection successful: $actual_bssid"; return 0
-      else
-        log_msg "❌ iw+wpa BSSID mismatch: ${actual_bssid:-unknown}"
+    if command -v wpa_supplicant >/dev/null 2>&1; then
+      if $SUDO wpa_supplicant -i "$INTERFACE" -c "$wpa_conf" -B >/dev/null 2>&1; then
+        sleep 8; $SUDO dhclient "$INTERFACE" >/dev/null 2>&1 || true; sleep 3
+        local actual_bssid; actual_bssid="$(get_current_bssid)"
+        rm -f "$wpa_conf"; pkill -f "wpa_supplicant.*$INTERFACE" || true
+        if [[ "$actual_bssid" == "${bssid,,}" ]]; then
+          log_msg "✅ iw+wpa_supplicant BSSID connection successful: $actual_bssid"; return 0
+        else
+          log_msg "❌ iw+wpa BSSID mismatch: ${actual_bssid:-unknown}"
+        fi
       fi
+    else
+      log_msg "ℹ️ wpa_supplicant not installed; skipping last-resort method"
     fi
     rm -f "$wpa_conf"
   fi
@@ -805,20 +809,17 @@ manage_roaming() {
       local t_sig="${BSSID_SIGNALS[$target]:-unknown}"
       local c_sig="${BSSID_SIGNALS[$current]:-unknown}"
       log_msg "🔄 Roaming candidate: $target (SIG $t_sig) vs current $current (SIG ${c_sig})"
-
-      set +e
       if timeout 180 perform_roaming "$target" "$SSID" "$PASSWORD" 2>&1; then
         log_msg "✅ Roaming completed successfully"
         LAST_ROAM_TIME=$(date +%s)
       else
         local rc=$?
         if [[ $rc -eq 124 ]]; then
-          log_msg "⏱️  Roaming timed out (120s)"
+          log_msg "⏱️  Roaming timed out (180s)"
         else
           log_msg "❌ Roaming failed (exit $rc)"
         fi
       fi
-      set -e
     else
       log_msg "ℹ️  No better BSSID candidate found; skipping roam"
     fi
