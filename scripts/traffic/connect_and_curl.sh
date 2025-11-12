@@ -802,7 +802,7 @@ manage_roaming() {
 
     local target; target="$(select_roaming_target "$current")"
     if [[ -n "$target" ]]; then
-      local t_sig="${BSSID_SIGNALS[$target]}"
+      local t_sig="${BSSID_SIGNALS[$target]:-unknown}"
       local c_sig="${BSSID_SIGNALS[$current]:-unknown}"
       log_msg "🔄 Roaming candidate: $target (SIG $t_sig) vs current $current (SIG ${c_sig})"
 
