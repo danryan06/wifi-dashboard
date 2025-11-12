@@ -869,9 +869,10 @@ manage_roaming() {
     current="$(echo "$current" | tr 'a-f' 'A-F')"
     [[ -z "$current" ]] && { log_msg "⚠️  Current BSSID unknown, skipping roam"; return 0; }
 
-    # Capture only a pure BSSID line from selector output (logs may print to stdout)
-    local target
-    target="$(select_roaming_target "$current" 2>&1 | awk '/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/ {print $0}' | tail -n1)"
+    # Capture only a valid BSSID from selector output (strip any log lines)
+    local target_raw target
+    target_raw="$(select_roaming_target "$current" 2>&1)"
+    target="$(echo "$target_raw" | grep -E -o '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' | tail -n1 | tr 'a-f' 'A-F')"
     if [[ -n "$target" ]]; then
       local t_sig="${BSSID_SIGNALS[$target]:-unknown}"
       local c_sig="${BSSID_SIGNALS[$current]:-unknown}"
