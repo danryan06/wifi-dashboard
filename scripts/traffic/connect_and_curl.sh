@@ -849,7 +849,9 @@ manage_roaming() {
     local target_raw target
     target_raw="$(select_roaming_target "$current" 2>&1)"
     target="$(echo "$target_raw" | grep -E -o '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' | tail -n1 | tr 'a-f' 'A-F')"
-    if [[ -n "$target" ]]; then
+    # The "no target" log line contains the current BSSID, so the last-MAC
+    # extraction above can return it; never "roam" to the BSSID we're already on
+    if [[ -n "$target" && "$target" != "$current" ]]; then
       local t_sig="${BSSID_SIGNALS[$target]:-unknown}"
       local c_sig="${BSSID_SIGNALS[$current]:-unknown}"
       log_msg "🔄 Roaming candidate: $target (SIG $t_sig) vs current $current (SIG ${c_sig})"

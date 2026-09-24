@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connect now retries with an explicitly configured WPA-PSK profile.
 - **Double log prefix**: `log_msg` no longer prefixes messages before handing
   them to `log_msg_with_rotation`, which adds its own prefix.
+- **Phantom roam to current BSSID**: when no roam target was found, the
+  target extraction in `manage_roaming` could pick up the current BSSID from
+  the selector's log output and needlessly disconnect/reconnect to the AP the
+  client was already on, every roaming interval. Roams to the current BSSID
+  are now skipped.
 
 ## [5.2.0] - 2026-09-24
 
