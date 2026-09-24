@@ -21,7 +21,8 @@ for iface in wlan0 wlan1 eth0; do
         # Check if connected and get SSID/BSSID
         if nmcli device show "$iface" 2>/dev/null | grep -q "connected"; then
             echo "    SSID: $(nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}' || echo 'N/A')"
-            echo "    BSSID: $(nmcli -t -f active,bssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}' || echo 'N/A')"
+            # BSSID contains colons that nmcli -t escapes as '\:'; take the line remainder and unescape
+            echo "    BSSID: $(nmcli -t -f active,bssid dev wifi 2>/dev/null | grep '^yes:' | head -1 | cut -d: -f2- | sed 's/\\:/:/g' || echo 'N/A')"
         else
             echo "    Status: Not connected"
         fi
