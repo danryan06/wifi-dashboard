@@ -88,10 +88,12 @@ check_service_status() {
         "wired-test:Wired client simulation" 
         "wifi-good:Wi-Fi good client"
         "wifi-bad:Wi-Fi bad client"
-        "traffic-eth0:Ethernet traffic"
-        "traffic-wlan0:Wi-Fi 1 traffic"
-        "traffic-wlan1:Wi-Fi 2 traffic"
     )
+    # Extra Wi-Fi clients (one wifi-client@ instance per additional adapter)
+    local unit
+    while read -r unit _rest; do
+        [[ -n "$unit" ]] && services+=("${unit%.service}:Extra Wi-Fi client")
+    done < <(systemctl list-units --all --plain --no-legend 'wifi-client@*' 2>/dev/null)
     
     for service_desc in "${services[@]}"; do
         local service="${service_desc%:*}"
@@ -204,7 +206,11 @@ check_logs() {
 show_service_errors() {
     log_step "Showing recent service errors..."
     
-    local services=("wired-test" "wifi-good" "wifi-bad" "traffic-eth0" "traffic-wlan0" "traffic-wlan1")
+    local services=("wired-test" "wifi-good" "wifi-bad")
+    local unit
+    while read -r unit _rest; do
+        [[ -n "$unit" ]] && services+=("${unit%.service}")
+    done < <(systemctl list-units --all --plain --no-legend 'wifi-client@*' 2>/dev/null)
     
     for service in "${services[@]}"; do
         if systemctl is-failed --quiet "${service}.service" 2>/dev/null; then
@@ -267,7 +273,11 @@ provide_recommendations() {
     
     # Check for services in activating state
     local activating_services=()
-    local services=("wired-test" "wifi-good" "wifi-bad" "traffic-eth0" "traffic-wlan0" "traffic-wlan1")
+    local services=("wired-test" "wifi-good" "wifi-bad")
+    local unit
+    while read -r unit _rest; do
+        [[ -n "$unit" ]] && services+=("${unit%.service}")
+    done < <(systemctl list-units --all --plain --no-legend 'wifi-client@*' 2>/dev/null)
     
     for service in "${services[@]}"; do
         if systemctl is-active --quiet "${service}.service" 2>/dev/null; then
@@ -387,7 +397,10 @@ pip3 install yt-dlp --break-system-packages >/dev/null 2>&1 || true
 pip3 install speedtest-cli --break-system-packages >/dev/null 2>&1 || true
 
 # Restart services with delays
-services=("wifi-dashboard" "wired-test" "wifi-good" "wifi-bad" "traffic-eth0" "traffic-wlan0" "traffic-wlan1")
+services=("wifi-dashboard" "wired-test" "wifi-good" "wifi-bad")
+while read -r unit _rest; do
+    [[ -n "$unit" ]] && services+=("${unit%.service}")
+done < <(systemctl list-units --all --plain --no-legend 'wifi-client@*' 2>/dev/null)
 
 echo "Restarting services..."
 for service in "${services[@]}"; do

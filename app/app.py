@@ -16,9 +16,9 @@ app.secret_key = 'wifi-test-dashboard-secret-key'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "configs", "ssid.conf")
 SETTINGS_FILE = os.path.join(BASE_DIR, "configs", "settings.conf")
+CLIENTS_CONF = os.path.join(BASE_DIR, "configs", "clients.conf")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 
-IFACES = ["eth0", "wlan0", "wlan1"]
 STATS_DIR = "/home/pi/wifi_test_dashboard/stats"
 BASELINE_FILE = os.path.join(STATS_DIR, "io_baselines.json")
 _MB = 1024 * 1024
@@ -30,10 +30,51 @@ _state = {
     "last_ts": None,
 }
 
+def get_wifi_clients():
+    """Parse configs/clients.conf: one 'iface:role:hostname:intensity:roaming' per line."""
+    clients = []
+    try:
+        if os.path.exists(CLIENTS_CONF):
+            with open(CLIENTS_CONF) as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = line.split(':')
+                    if len(parts) < 2 or not parts[0]:
+                        continue
+                    clients.append({
+                        'interface': parts[0],
+                        'role': parts[1] or 'good',
+                        'hostname': parts[2] if len(parts) > 2 and parts[2] else f"CNXNMist-WiFi-{parts[0]}",
+                        'intensity': parts[3] if len(parts) > 3 and parts[3] else 'medium',
+                        'roaming': parts[4].lower() == 'true' if len(parts) > 4 and parts[4] else True,
+                    })
+    except Exception as e:
+        logger.error(f"Error reading clients.conf: {e}")
+    return clients
+
+def get_extra_wifi_clients():
+    """Wi-Fi clients beyond the primary good/bad pair (run as wifi-client@ instances)."""
+    a = get_interface_assignments()
+    primary = {a.get('good_interface'), a.get('bad_interface')}
+    return [c for c in get_wifi_clients() if c['interface'] not in primary]
+
+def get_tracked_ifaces():
+    """All interfaces whose throughput/stats the dashboard tracks."""
+    a = get_interface_assignments()
+    ifaces = [a.get('wired_interface') or 'eth0', a.get('good_interface') or 'wlan0']
+    if a.get('bad_interface'):
+        ifaces.append(a['bad_interface'])
+    for c in get_extra_wifi_clients():
+        if c['interface'] not in ifaces:
+            ifaces.append(c['interface'])
+    return ifaces
+
 def _read_now():
     per = psutil.net_io_counters(pernic=True)
     now = {}
-    for i in IFACES:
+    for i in get_tracked_ifaces():
         if i in per:
             now[i] = {"rx": per[i].bytes_recv, "tx": per[i].bytes_sent}
     return now
@@ -59,6 +100,7 @@ def _save_baseline():
 
 def get_kernel_throughput():
     """Return dict: iface -> {download, upload, total_download, total_upload}"""
+    ifaces = get_tracked_ifaces()
     with _state_lock:
         # first run: initialize from disk (if present)
         if _state["last_ts"] is None or not _state["prev"]:
@@ -67,12 +109,12 @@ def get_kernel_throughput():
             if not _state["prev"]:
                 _state["prev"] = _read_now()
                 _state["last_ts"] = time.time()
-                for i in IFACES:
+                for i in ifaces:
                     _state["totals"].setdefault(i, {"download": 0, "upload": 0})
                 _save_baseline()
                 # first response has no deltas yet
                 out = {}
-                for i in IFACES:
+                for i in ifaces:
                     t = _state["totals"].get(i, {"download": 0, "upload": 0})
                     out[i] = {
                         "download": 0.0,
@@ -87,7 +129,7 @@ def get_kernel_throughput():
         dt = max(t - (_state["last_ts"] or t), 1e-3)
 
         out = {}
-        for i in IFACES:
+        for i in ifaces:
             prev = _state["prev"].get(i)
             cur  = now.get(i, prev)
             if not cur:
@@ -341,6 +383,8 @@ def calculate_throughput():
         }
         if bad_iface and bad_iface != 'none':
             service_map[bad_iface] = 'wifi-bad'
+        for c in get_extra_wifi_clients():
+            service_map.setdefault(c['interface'], f"wifi-client@{c['interface']}")
     except Exception as e:
         logger.error(f"Error reading interface assignments: {e}")
         good_iface, bad_iface, wired_iface = 'wlan0', 'wlan1', 'eth0'
@@ -362,6 +406,7 @@ def calculate_throughput():
     candidates.update({wired_iface, good_iface})
     if bad_iface and bad_iface != 'none':
         candidates.add(bad_iface)
+    candidates.update(service_map.keys())
 
     # Compute deltas
     have_prev = bool(last_stats) and last_stats_time > 0
@@ -473,9 +518,9 @@ def get_system_info():
         }
 
 def get_service_status():
-    """Get status of all INTEGRATED services"""
-    # INTEGRATED SERVICES ONLY - no separate traffic services
+    """Get status of all INTEGRATED services (incl. wifi-client@ instances)"""
     services = ['wifi-dashboard', 'wired-test', 'wifi-good', 'wifi-bad']
+    services += [f"wifi-client@{c['interface']}" for c in get_extra_wifi_clients()]
     status = {}
     
     for service in services:
@@ -628,12 +673,21 @@ def index():
 def build_log_labels(assignments: dict) -> dict:
     good_iface = assignments.get("good_interface") or "wlan0"
     bad_iface  = assignments.get("bad_interface") or "wlan1"
-    return {
+    labels = {
         "main":        "Install/Upgrade",
         "wired":       "Wired Client + Heavy Traffic (eth0)",
         "wifi-good":   f"Wi-Fi Good Client + Traffic ({good_iface})",
         "wifi-bad":    f"Wi-Fi Bad Client - Auth Failures ({bad_iface})",
     }
+    for c in get_extra_wifi_clients():
+        labels[f"wifi-{c['interface']}"] = f"Wi-Fi Client {c['hostname']} ({c['interface']})"
+    return labels
+
+def get_valid_log_names():
+    """Log names the dashboard exposes (dynamic per configured clients)."""
+    names = ["main", "wired", "wifi-good", "wifi-bad"]
+    names += [f"wifi-{c['interface']}" for c in get_extra_wifi_clients()]
+    return names
 
 @app.route("/status")
 def status():
@@ -645,14 +699,9 @@ def status():
         interface_assignments = get_interface_assignments()
         interface_capabilities = get_interface_capabilities()
         
-        # Get recent logs from INTEGRATED services only - NO separate traffic services
-        logs = {
-            'main':       read_log_file('main.log', 50),
-            'wired':      read_log_file('wired.log', 50),
-            'wifi-good':  read_log_file('wifi-good.log', 50),
-            'wifi-bad':   read_log_file('wifi-bad.log', 50),
-        }  
-        
+        # Get recent logs from all integrated client services
+        logs = {name: read_log_file(f'{name}.log', 50) for name in get_valid_log_names()}
+
         # Get log file information for integrated services only
         log_info = {}
         for log_name in logs.keys():
@@ -665,6 +714,7 @@ def status():
             "service_status": service_status,
             "interface_assignments": interface_assignments,
             "interface_capabilities": interface_capabilities,
+            "wifi_clients": get_wifi_clients(),
             "logs": logs,
             "log_info": log_info,
             "log_labels": build_log_labels(interface_assignments),
@@ -693,10 +743,12 @@ def api_logs(log_name):
         bi = assignments.get("bad_interface")
         if gi: alias_map[gi] = "wifi-good"
         if bi: alias_map[bi] = "wifi-bad"
+        for c in get_extra_wifi_clients():
+            alias_map[c['interface']] = f"wifi-{c['interface']}"
         log_name = alias_map.get(log_name, log_name)
 
         # Only expose integrated service logs
-        valid_logs = ["main", "wired", "wifi-good", "wifi-bad"]
+        valid_logs = get_valid_log_names()
         if log_name not in valid_logs:
             return jsonify({"success": False, "error": "Invalid log name"}), 400
 
@@ -728,10 +780,8 @@ def api_throughput():
     based on kernel counters. No dependence on shell-written JSON stats.
     """
     try:
-        # Use your assignment helper to decide which interfaces to expose
-        a = get_interface_assignments()
-        candidates = set(["eth0", a.get("good_interface", "wlan0"), a.get("bad_interface", "wlan1")])
-        candidates = {i for i in candidates if i}
+        # All assigned client interfaces (wired, good, bad, extra wifi-client@)
+        candidates = set(get_tracked_ifaces())
 
         # Kernel-based rates + totals
         kdata = get_kernel_throughput()
@@ -790,7 +840,17 @@ def api_interfaces():
                 'assignment_type': interface_assignments['bad_type'],
                 'description': 'Wi-Fi Bad Client (Authentication Failures)'
             })
-        
+
+        # Extra Wi-Fi clients running as wifi-client@ template instances
+        for c in get_extra_wifi_clients():
+            iface = c['interface']
+            interface_data[iface] = interface_capabilities.get(iface, {})
+            interface_data[iface].update({
+                'assignment': 'extra_client',
+                'assignment_type': c['role'],
+                'description': f"Wi-Fi Client {c['hostname']} (wifi-client@{iface})"
+            })
+
         # Add ethernet
         if 'eth0' in interface_capabilities:
             interface_data['eth0'] = interface_capabilities['eth0']
@@ -842,6 +902,11 @@ def traffic_status():
             items.append(
                 ('wifi-bad', a['bad_interface'],
                  'Wi-Fi Bad Client (Auth Failures for Mist PCAP)', 'wifi-bad.log')
+            )
+        for c in get_extra_wifi_clients():
+            items.append(
+                (f"wifi-client@{c['interface']}", c['interface'],
+                 f"Wi-Fi Client {c['hostname']} ({c['role']})", f"wifi-{c['interface']}.log")
             )
 
         traffic_status_data = {}
@@ -921,19 +986,17 @@ def traffic_action():
 
         # Build valid iface set + iface->service map from assignments
         a = get_interface_assignments()
-        valid_ifaces = {a.get('wired_interface', 'eth0'), a.get('good_interface', 'wlan0')}
-        if a.get('bad_interface'):
-            valid_ifaces.add(a['bad_interface'])
-
-        if interface not in valid_ifaces:
-            return jsonify({"success": False, "error": "Invalid interface"}), 400
-
         service_map = {
             a.get('wired_interface', 'eth0'): 'wired-test',
             a.get('good_interface',  'wlan0'): 'wifi-good',
         }
         if a.get('bad_interface'):
             service_map[a['bad_interface']] = 'wifi-bad'
+        for c in get_extra_wifi_clients():
+            service_map.setdefault(c['interface'], f"wifi-client@{c['interface']}")
+
+        if interface not in service_map:
+            return jsonify({"success": False, "error": "Invalid interface"}), 400
 
         service_name = service_map.get(interface)
         if not service_name:
@@ -975,6 +1038,9 @@ def update_wifi():
             try:
                 subprocess.run(['sudo', 'systemctl', 'restart', '--no-block', 'wifi-good.service'])
                 subprocess.run(['sudo', 'systemctl', 'restart', '--no-block', 'wifi-bad.service'])
+                for c in get_extra_wifi_clients():
+                    subprocess.run(['sudo', 'systemctl', 'restart', '--no-block',
+                                    f"wifi-client@{c['interface']}.service"])
                 flash("Wi-Fi services restarting in the background…", "info")
 
                 # Run hostname verification script
@@ -998,11 +1064,7 @@ def update_wifi():
 
 def get_netem_interfaces():
     """Interfaces that netem may be applied to (all assigned client interfaces)"""
-    a = get_interface_assignments()
-    ifaces = {a.get('wired_interface') or 'eth0', a.get('good_interface') or 'wlan0'}
-    if a.get('bad_interface'):
-        ifaces.add(a['bad_interface'])
-    return ifaces
+    return set(get_tracked_ifaces())
 
 @app.route("/set_netem", methods=["POST"])
 def set_netem():
@@ -1043,8 +1105,10 @@ def service_action():
     try:
         service = request.form.get("service")
         action = request.form.get("action")
-        
-        if service not in ['wired-test', 'wifi-good', 'wifi-bad']:
+
+        valid_services = {'wired-test', 'wifi-good', 'wifi-bad'}
+        valid_services.update(f"wifi-client@{c['interface']}" for c in get_extra_wifi_clients())
+        if service not in valid_services:
             flash("Invalid service", "error")
             return redirect("/")
         

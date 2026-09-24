@@ -35,6 +35,14 @@ cleanup_services() {
         rm -f "/etc/systemd/system/${service}.service"
     done
 
+    # Template instances (wifi-client@wlanX) from multi-adapter setups
+    while read -r unit _rest; do
+        [[ -n "$unit" ]] || continue
+        systemctl stop "$unit" 2>/dev/null || true
+        systemctl disable "$unit" 2>/dev/null || true
+    done < <(systemctl list-units --all --plain --no-legend 'wifi-client@*' 2>/dev/null)
+    rm -f /etc/systemd/system/wifi-client@.service
+
     systemctl daemon-reload
     log_info "✓ Dashboard services cleaned up"
 }

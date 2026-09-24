@@ -1345,6 +1345,9 @@
 
             // Update netem interface choices
             updateNetemInterfaceOptions(data);
+
+            // Add log tabs for any extra wifi-client@ instances
+            updateLogTabs(data.log_labels || {});
             
             // Update logs if on logs tab and using basic display
             const logsTab = document.getElementById('logs');
@@ -1542,14 +1545,19 @@
         
         function updateServiceControls(serviceStatus) {
             const container = document.getElementById('service-controls');
-            const services = ['wifi-dashboard', 'wired-test', 'wifi-good', 'wifi-bad'];
+            const services = Object.keys(serviceStatus || {});
+            if (services.length === 0) {
+                services.push('wifi-dashboard', 'wired-test', 'wifi-good', 'wifi-bad');
+            }
             
             container.innerHTML = services.map(service => {
                 const status = serviceStatus[service] || 'unknown';
                 const statusClass = status === 'active' ? 'active' : 
                                   status === 'inactive' ? 'inactive' : 'unknown';
                 
-                const serviceName = service.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                const serviceName = service.startsWith('wifi-client@')
+                    ? `Wi-Fi Client ${service.split('@')[1]}`
+                    : service.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
                 
                 return `
                     <div class="service-item">
@@ -1777,6 +1785,21 @@
             }
         }
         
+        // Create log tabs for dynamically configured clients (wifi-client@ instances)
+        function updateLogTabs(logLabels) {
+            const container = document.querySelector('.log-tabs');
+            if (!container) return;
+            Object.keys(logLabels).forEach(name => {
+                if (container.querySelector(`[data-log="${name}"]`)) return;
+                const btn = document.createElement('button');
+                btn.className = 'log-tab';
+                btn.dataset.log = name;
+                btn.textContent = `📶 ${name.replace(/^wifi-/, 'Wi-Fi ')}`;
+                btn.title = logLabels[name];
+                container.appendChild(btn);
+            });
+        }
+
         // Network emulation helpers
         function updateNetemInterfaceOptions(data) {
             const select = document.getElementById('netem-iface-select');
@@ -1873,7 +1896,9 @@
         async function restartAllServices() {
             if (!confirm('Restart all Wi-Fi testing services?')) return;
             try {
-                const services = ['wired-test', 'wifi-good', 'wifi-bad'];
+                const known = Object.keys((currentData && currentData.service_status) || {})
+                    .filter(s => s !== 'wifi-dashboard');
+                const services = known.length ? known : ['wired-test', 'wifi-good', 'wifi-bad'];
                 for (const service of services) {
                     await serviceAction(service, 'restart');
                     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1955,7 +1980,7 @@
     function updateLogControlsVisibility() {
         const el = document.getElementById('logControls');
         if (!el) return;
-        const show = (window.currentLogName === 'wifi-good' || window.currentLogName === 'wifi-bad');
+        const show = typeof window.currentLogName === 'string' && window.currentLogName.startsWith('wifi-');
         el.style.display = show ? 'flex' : 'none';
         if (!show) {
             stopAutoRefresh();

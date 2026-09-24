@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# verify-hostnames.sh - Verify Wi-Fi hostname separation after SSID is configured
+# verify-hostnames.sh - Verify per-client DHCP hostname separation.
+# Reads configs/clients.conf (any number of Wi-Fi clients) and each client's
+# identity_<iface>.json written by the client scripts.
 
 set -euo pipefail
 
 DASHBOARD_DIR="/home/pi/wifi_test_dashboard"
+CLIENTS_CONF="$DASHBOARD_DIR/configs/clients.conf"
 LOG_FILE="$DASHBOARD_DIR/logs/main.log"
 
 log_msg() {
@@ -12,12 +15,7 @@ log_msg() {
     echo "$msg" | tee -a "$LOG_FILE"
 }
 
-log_msg INFO "Starting hostname verification..."
-
-wlan0_file="$DASHBOARD_DIR/identity_wlan0.json"
-wlan1_file="$DASHBOARD_DIR/identity_wlan1.json"
-
-get_hostname() {
+get_field() {
     local file="$1" field="$2"
     if [[ -f "$file" ]]; then
         if command -v jq >/dev/null 2>&1; then
@@ -30,23 +28,47 @@ get_hostname() {
     fi
 }
 
-wlan0_expected=$(get_hostname "$wlan0_file" expected_hostname)
-wlan0_actual=$(get_hostname "$wlan0_file" hostname)
-wlan1_expected=$(get_hostname "$wlan1_file" expected_hostname)
-wlan1_actual=$(get_hostname "$wlan1_file" hostname)
+log_msg INFO "Starting hostname verification..."
 
-log_msg INFO "wlan0: expected='$wlan0_expected', actual='$wlan0_actual'"
-log_msg INFO "wlan1: expected='$wlan1_expected', actual='$wlan1_actual'"
-
-# Verification rules
-if [[ "$wlan0_actual" == "CNXNMist-WiFiGood" && "$wlan1_actual" == "CNXNMist-WiFiBad" ]]; then
-    log_msg INFO "✅ Hostname separation verified successfully"
+if [[ ! -f "$CLIENTS_CONF" ]]; then
+    log_msg WARN "No clients.conf found; nothing to verify yet"
     exit 0
-elif [[ "$wlan0_actual" != "unknown" && "$wlan1_actual" != "unknown" && "$wlan0_actual" != "$wlan1_actual" ]]; then
-    log_msg WARN "⚠ Hostnames are different but not standard: wlan0='$wlan0_actual', wlan1='$wlan1_actual'"
+fi
+
+issues=0
+checked=0
+declare -A seen_hostnames
+
+while IFS=: read -r iface role expected _rest; do
+    [[ -z "$iface" || "$iface" == \#* ]] && continue
+    checked=$((checked + 1))
+
+    identity_file="$DASHBOARD_DIR/identity_${iface}.json"
+    actual=$(get_field "$identity_file" hostname)
+
+    log_msg INFO "$iface (role=$role): expected='$expected', reported='$actual'"
+
+    if [[ "$actual" == "unknown" ]]; then
+        log_msg WARN "$iface: no identity report yet (client may not have connected)"
+        continue
+    fi
+
+    if [[ -n "${seen_hostnames[$actual]:-}" ]]; then
+        log_msg WARN "❌ Hostname collision: '$actual' used by both ${seen_hostnames[$actual]} and $iface"
+        issues=$((issues + 1))
+    fi
+    seen_hostnames["$actual"]="$iface"
+done < "$CLIENTS_CONF"
+
+if (( checked == 0 )); then
+    log_msg WARN "clients.conf contains no client entries"
+    exit 0
+fi
+
+if (( issues == 0 )); then
+    log_msg INFO "✅ Hostname separation verified (no collisions among ${#seen_hostnames[@]} reported hostnames)"
     exit 0
 else
-    log_msg WARN "❌ Hostname separation not established yet"
-    log_msg WARN "This may resolve once Wi-Fi services connect to the configured SSID"
+    log_msg WARN "❌ Found $issues hostname collision(s); check clients.conf and service logs"
     exit 1
 fi

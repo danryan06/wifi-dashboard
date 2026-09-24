@@ -51,100 +51,62 @@ setup_system_hostname() {
     fi
 }
 
-# NEW: Pre-create DHCP hostname configs for all interfaces
+# Pre-create DHCP hostname configs for all client interfaces (wired + every
+# Wi-Fi persona in configs/clients.conf).
+write_dhcp_hostname_config() {
+    local iface="$1" hostname="$2"
+    log_info "Creating DHCP config for ${iface} (${hostname})..."
+
+    cat > "/etc/dhcp/dhclient-${iface}.conf" << EOF
+# DHCP hostname for ${iface} - ${hostname}
+send host-name "${hostname}";
+supersede host-name "${hostname}";
+
+request subnet-mask, broadcast-address, time-offset, routers,
+        domain-name, domain-name-servers, domain-search, host-name,
+        dhcp6.name-servers, dhcp6.domain-search, dhcp6.fqdn,
+        netbios-name-servers, netbios-scope, interface-mtu,
+        rfc3442-classless-static-routes, ntp-servers;
+EOF
+
+    cat > "/etc/NetworkManager/conf.d/dhcp-hostname-${iface}.conf" << EOF
+[connection-${iface}]
+match-device=interface-name:${iface}
+
+[ipv4]
+dhcp-hostname=${hostname}
+dhcp-send-hostname=yes
+
+[ipv6]
+dhcp-hostname=${hostname}
+dhcp-send-hostname=yes
+EOF
+}
+
 precreate_dhcp_configs() {
     log_info "Pre-creating DHCP hostname configurations..."
-    
-    # Create dhcp directory
+
     mkdir -p /etc/dhcp
     mkdir -p /etc/NetworkManager/conf.d
-    
-    # Wired (eth0) - CNXNMist-Wired
-    log_info "Creating DHCP config for eth0 (CNXNMist-Wired)..."
-    cat > /etc/dhcp/dhclient-eth0.conf << 'EOF'
-# DHCP hostname for eth0 - Wired Client
-send host-name "CNXNMist-Wired";
-supersede host-name "CNXNMist-Wired";
 
-request subnet-mask, broadcast-address, time-offset, routers,
-        domain-name, domain-name-servers, domain-search, host-name,
-        dhcp6.name-servers, dhcp6.domain-search, dhcp6.fqdn,
-        netbios-name-servers, netbios-scope, interface-mtu,
-        rfc3442-classless-static-routes, ntp-servers;
-EOF
-    
-    cat > /etc/NetworkManager/conf.d/dhcp-hostname-eth0.conf << 'EOF'
-[connection-eth0]
-match-device=interface-name:eth0
+    write_dhcp_hostname_config "eth0" "CNXNMist-Wired"
 
-[ipv4]
-dhcp-hostname=CNXNMist-Wired
-dhcp-send-hostname=yes
+    local clients_conf="${CONFIGS_DIR}/clients.conf"
+    if [[ -f "$clients_conf" ]]; then
+        while IFS=: read -r c_iface _c_role c_host _rest; do
+            [[ -z "$c_iface" || "$c_iface" == \#* ]] && continue
+            write_dhcp_hostname_config "$c_iface" "${c_host:-CNXNMist-WiFi-${c_iface}}"
+        done < "$clients_conf"
+    else
+        # Fallback when auto-assignment has not produced clients.conf
+        write_dhcp_hostname_config "wlan0" "CNXNMist-WiFiGood"
+        write_dhcp_hostname_config "wlan1" "CNXNMist-WiFiBad"
+    fi
 
-[ipv6]
-dhcp-hostname=CNXNMist-Wired
-dhcp-send-hostname=yes
-EOF
-    
-    # Wi-Fi Good (wlan0) - CNXNMist-WiFiGood
-    log_info "Creating DHCP config for wlan0 (CNXNMist-WiFiGood)..."
-    cat > /etc/dhcp/dhclient-wlan0.conf << 'EOF'
-# DHCP hostname for wlan0 - Wi-Fi Good Client
-send host-name "CNXNMist-WiFiGood";
-supersede host-name "CNXNMist-WiFiGood";
-
-request subnet-mask, broadcast-address, time-offset, routers,
-        domain-name, domain-name-servers, domain-search, host-name,
-        dhcp6.name-servers, dhcp6.domain-search, dhcp6.fqdn,
-        netbios-name-servers, netbios-scope, interface-mtu,
-        rfc3442-classless-static-routes, ntp-servers;
-EOF
-    
-    cat > /etc/NetworkManager/conf.d/dhcp-hostname-wlan0.conf << 'EOF'
-[connection-wlan0]
-match-device=interface-name:wlan0
-
-[ipv4]
-dhcp-hostname=CNXNMist-WiFiGood
-dhcp-send-hostname=yes
-
-[ipv6]
-dhcp-hostname=CNXNMist-WiFiGood
-dhcp-send-hostname=yes
-EOF
-    
-    # Wi-Fi Bad (wlan1) - CNXNMist-WiFiBad
-    log_info "Creating DHCP config for wlan1 (CNXNMist-WiFiBad)..."
-    cat > /etc/dhcp/dhclient-wlan1.conf << 'EOF'
-# DHCP hostname for wlan1 - Wi-Fi Bad Client
-send host-name "CNXNMist-WiFiBad";
-supersede host-name "CNXNMist-WiFiBad";
-
-request subnet-mask, broadcast-address, time-offset, routers,
-        domain-name, domain-name-servers, domain-search, host-name,
-        dhcp6.name-servers, dhcp6.domain-search, dhcp6.fqdn,
-        netbios-name-servers, netbios-scope, interface-mtu,
-        rfc3442-classless-static-routes, ntp-servers;
-EOF
-    
-    cat > /etc/NetworkManager/conf.d/dhcp-hostname-wlan1.conf << 'EOF'
-[connection-wlan1]
-match-device=interface-name:wlan1
-
-[ipv4]
-dhcp-hostname=CNXNMist-WiFiBad
-dhcp-send-hostname=yes
-
-[ipv6]
-dhcp-hostname=CNXNMist-WiFiBad
-dhcp-send-hostname=yes
-EOF
-    
-    # Reload NetworkManager to pick up new configs
     log_info "Reloading NetworkManager with new DHCP configs..."
     nmcli general reload || true
-    
-    log_info "✓ DHCP hostname configs pre-created for all interfaces"
+
+    log_info "✓ DHCP hostname configs pre-created for all client interfaces"
 }
 
 create_startup_check_script() {
