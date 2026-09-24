@@ -438,13 +438,15 @@ def get_system_info():
                     interfaces[iface] = []
                 interfaces[iface].append(addr)
         
-        # Get netem status
+        # Get netem status across all client interfaces
         try:
-            assignments = get_interface_assignments()
-            good_iface = assignments.get('good_interface', 'wlan0')
-            netem_result = subprocess.run(['tc', 'qdisc', 'show', 'dev', good_iface], 
-                                        capture_output=True, text=True, timeout=5)
-            netem_status = netem_result.stdout.strip() if netem_result.returncode == 0 else "No netem configured"
+            netem_lines = []
+            for iface in sorted(get_netem_interfaces()):
+                netem_result = subprocess.run(['tc', 'qdisc', 'show', 'dev', iface],
+                                              capture_output=True, text=True, timeout=5)
+                if netem_result.returncode == 0 and 'netem' in netem_result.stdout:
+                    netem_lines.append(f"{iface}: {netem_result.stdout.strip()}")
+            netem_status = "\n".join(netem_lines) if netem_lines else "No netem configured"
         except Exception:
             netem_status = "Error checking netem status"
         
@@ -994,32 +996,40 @@ def update_wifi():
 
     return redirect("/")
 
+def get_netem_interfaces():
+    """Interfaces that netem may be applied to (all assigned client interfaces)"""
+    a = get_interface_assignments()
+    ifaces = {a.get('wired_interface') or 'eth0', a.get('good_interface') or 'wlan0'}
+    if a.get('bad_interface'):
+        ifaces.add(a['bad_interface'])
+    return ifaces
+
 @app.route("/set_netem", methods=["POST"])
 def set_netem():
-    """Configure network emulation on the GOOD client interface"""
+    """Configure network emulation on a selected client interface"""
     try:
         a = get_interface_assignments()
-        good_iface = a.get('good_interface') or 'wlan0'
+        valid_ifaces = get_netem_interfaces()
 
-        latency = request.form.get("latency", "0")
-        loss = request.form.get("loss", "0")
+        interface = request.form.get("interface", "").strip() or (a.get('good_interface') or 'wlan0')
+        if interface not in valid_ifaces:
+            flash(f"Invalid netem interface: {interface}", "error")
+            return redirect("/")
 
-        # Remove existing netem safely
-        subprocess.run(["sudo", "tc", "qdisc", "del", "dev", good_iface, "root"],
-                       stderr=subprocess.DEVNULL, timeout=10)
+        latency = request.form.get("latency", "0").strip() or "0"
+        loss = request.form.get("loss", "0").strip() or "0"
+        jitter = request.form.get("jitter", "0").strip() or "0"
 
-        cmd = ["sudo", "tc", "qdisc", "add", "dev", good_iface, "root", "netem"]
-        if int(latency) > 0:
-            cmd.extend(["delay", f"{latency}ms"])
-        if float(loss) > 0:
-            cmd.extend(["loss", f"{loss}%"])
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        script_path = os.path.join(BASE_DIR, "scripts", "apply_netem.sh")
+        result = subprocess.run(
+            ["sudo", "bash", script_path, interface, latency, loss, jitter],
+            capture_output=True, text=True, timeout=30
+        )
         if result.returncode == 0:
-            log_action(f"Applied netem on {good_iface}: latency={latency}ms, loss={loss}%")
-            flash(f"Network emulation applied on {good_iface}: {latency}ms latency, {loss}% loss", "success")
+            log_action(f"Applied netem on {interface}: latency={latency}ms, loss={loss}%, jitter={jitter}ms")
+            flash(f"Network emulation applied on {interface}: {latency}ms latency, {loss}% loss", "success")
         else:
-            flash(f"Failed to apply network emulation: {result.stderr}", "error")
+            flash(f"Failed to apply network emulation: {result.stderr or result.stdout}", "error")
 
     except Exception as e:
         logger.error(f"Error setting netem: {e}")

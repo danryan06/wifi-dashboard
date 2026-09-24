@@ -985,9 +985,16 @@
         <div id="netem" class="card hidden">
             <h2>🌐 Network Emulation (Netem)</h2>
             <p style="color: var(--muted); margin-bottom: 24px;">
-                Simulate real-world network conditions for testing. Changes apply to wlan0 interface.
+                Simulate real-world network conditions for testing. Select which client interface to degrade.
             </p>
             <form method="POST" action="/set_netem">
+                <div class="form-group">
+                    <label>🔌 Interface</label>
+                    <select name="interface" id="netem-iface-select">
+                        <option value="">(good Wi-Fi client - default)</option>
+                    </select>
+                    <small style="color: var(--muted); font-size: 0.85em;">Which client's traffic to degrade</small>
+                </div>
                 <div class="two-column">
                     <div class="form-group">
                         <label>⏱️ Latency (milliseconds)</label>
@@ -1335,6 +1342,9 @@
             
             // Update services
             updateServiceControls(data.service_status || {});
+
+            // Update netem interface choices
+            updateNetemInterfaceOptions(data);
             
             // Update logs if on logs tab and using basic display
             const logsTab = document.getElementById('logs');
@@ -1768,6 +1778,30 @@
         }
         
         // Network emulation helpers
+        function updateNetemInterfaceOptions(data) {
+            const select = document.getElementById('netem-iface-select');
+            if (!select) return;
+
+            const a = data.interface_assignments || {};
+            const options = [];
+            if (a.good_interface) options.push([a.good_interface, `${a.good_interface} (good Wi-Fi client)`]);
+            if (a.bad_interface) options.push([a.bad_interface, `${a.bad_interface} (bad Wi-Fi client)`]);
+            if (a.wired_interface) options.push([a.wired_interface, `${a.wired_interface} (wired client)`]);
+            (data.wifi_clients || []).forEach(c => {
+                if (!options.some(([v]) => v === c.interface)) {
+                    options.push([c.interface, `${c.interface} (${c.hostname || c.role})`]);
+                }
+            });
+
+            const previous = select.value;
+            select.innerHTML = options
+                .map(([value, label]) => `<option value="${value}">${label}</option>`)
+                .join('');
+            if (options.some(([v]) => v === previous)) {
+                select.value = previous;
+            }
+        }
+
         function clearNetem() {
             document.getElementById('latency-input').value = '0';
             document.getElementById('loss-input').value = '0';
