@@ -1,10 +1,26 @@
-# Wi-Fi Test Dashboard v5.1.0
+# Wi-Fi Test Dashboard v5.2.0
 
 🌐 **Advanced Raspberry Pi Traffic Generator with Wi-Fi Roaming for Juniper Mist PoC Demonstrations**
 
 A comprehensive network testing platform that simulates realistic client behavior including **Wi-Fi roaming between access points**, designed specifically for Juniper Mist Proof of Concept demonstrations.
 
-## 🆕 **What's New in v5.1.0**
+## 🆕 **What's New in v5.2.0**
+
+### 📡 **Multi-Client Scaling (USB Hub Support)**
+- **One client per adapter**: every detected USB Wi-Fi adapter becomes its own simulated client with a unique MAC address and DHCP hostname
+- **`wifi-client@<iface>` template services**: extra adapters beyond the primary good/bad pair run as systemd template instances
+- **`configs/clients.conf` personas**: per-interface role, hostname, traffic intensity, and roaming, auto-generated and manually editable
+- **Multi-NIC networking fixes**: ARP/rp_filter sysctls applied automatically so several interfaces can share one subnet cleanly
+
+### 🌐 **Per-Interface Network Emulation**
+- Apply latency, jitter, and packet loss to **any** client interface from the dashboard (previously hardcoded to the good client)
+
+### 🧰 **Reliability & Maintenance**
+- Installer now installs from a single git revision (local checkout or shallow clone) — no more per-file downloads or stale embedded fallbacks
+- Hostname lock files and staggered service startup removed: DHCP hostnames are per-interface, so clients start independently and boot ~40s faster
+- MIT `LICENSE` file and CI (shell syntax, ShellCheck, Python compile checks)
+
+## **What's in v5.1.0**
 
 ### 🔄 **Wi-Fi Roaming Simulation**
 - **Automatic BSSID Discovery**: Scans and catalogs all access points broadcasting the same SSID
@@ -57,8 +73,11 @@ A comprehensive network testing platform that simulates realistic client behavio
 - Raspberry Pi 4 (recommended) or Pi 3B+
 - MicroSD card (32GB+ recommended)
 - **2x USB Wi-Fi adapters** (for full roaming demonstration)
+- **Optional: powered USB hub + more adapters** — each extra adapter becomes an additional simulated client (see *Scaling with a USB Hub*)
 - Ethernet connection for wired testing
 - **Multiple APs broadcasting the same SSID** (for roaming)
+
+> **Adapter tip:** prefer chipsets with mainline Linux drivers (e.g. MediaTek MT7612U/MT7921AU, Atheros AR9271). Many Realtek adapters need out-of-tree drivers on Raspberry Pi OS and behave poorly with BSSID-locked roaming.
 
 ### **Software**
 - Raspberry Pi OS (Bullseye or newer)
@@ -164,16 +183,20 @@ DEMO_ROAMING_FREQUENCY=enhanced        # More frequent roaming for demo impact
 
 ## 📊 **Services Architecture**
 
-### **Integrated Services (v5.1.0)**
+### **Integrated Services (v5.2.0)**
 - `wifi-dashboard.service`: Web interface (Flask application)
 - `wired-test.service`: Ethernet client simulation with integrated heavy traffic
-- `wifi-good.service`: Wi-Fi client with roaming simulation and integrated medium traffic
+- `wifi-good.service`: Primary Wi-Fi client with roaming simulation and integrated traffic
 - `wifi-bad.service`: Authentication failure simulation for security testing
+- `wifi-client@<iface>.service`: One instance per **extra** USB Wi-Fi adapter; persona (role/hostname/intensity/roaming) comes from `configs/clients.conf`
+
+Clients start independently — each interface has its own MAC address and
+per-interface DHCP hostname, so no startup ordering or locking is needed.
 
 ### **Service Management**
 ```bash
-# View service status
-sudo systemctl status wifi-dashboard wifi-good wifi-bad wired-test
+# View service status (including extra adapters)
+sudo systemctl status wifi-dashboard wifi-good wifi-bad wired-test 'wifi-client@*'
 
 # Monitor roaming client
 sudo systemctl status wifi-good.service
@@ -185,6 +208,33 @@ sudo journalctl -u wifi-good.service -f
 sudo systemctl restart wifi-good.service
 ```
 
+## 🔌 **Scaling with a USB Hub (Multiple Clients)**
+
+Plug additional USB Wi-Fi adapters into a **powered** USB hub and each one
+becomes an individual client in the Mist dashboard:
+
+1. Connect the powered hub and adapters, then re-run detection and services:
+```bash
+sudo bash /home/pi/wifi_test_dashboard/scripts/install/04.5-auto-interface-assignment.sh
+sudo bash /home/pi/wifi_test_dashboard/scripts/install/07-services.sh
+```
+2. The best adapter stays the roaming **good** client, the second becomes the
+   **bad** client, and every extra adapter starts as an additional roaming
+   good client (`CNXNMist-WiFiGood2`, `CNXNMist-WiFiGood3`, ...).
+3. Adjust personas in `configs/clients.conf` (format:
+   `iface:role:hostname:intensity:roaming`) and restart:
+```bash
+sudo systemctl restart wifi-good wifi-bad 'wifi-client@*'
+```
+
+**Hardware notes:**
+- The hub **must be powered** — Wi-Fi adapters draw 300–500 mA each under
+  load and the Pi's own USB power budget (~1.2 A) will brown out otherwise.
+- All adapters on one hub share a single USB bus, and co-located 2.4 GHz
+  radios contend for airtime; extra clients default to *light* traffic.
+- The installer applies ARP/rp_filter sysctls automatically so multiple
+  interfaces can coexist on the same subnet.
+
 ## 🗂 **Directory Structure**
 
 ```
@@ -194,14 +244,16 @@ sudo systemctl restart wifi-good.service
 ├── configs/
 │   ├── ssid.conf                       # Wi-Fi credentials (SSID/password)
 │   ├── settings.conf                   # System configuration with roaming settings
-│   └── interface-assignments.conf     # Auto-detected interface assignments
+│   ├── clients.conf                    # Per-interface client personas (role/hostname/intensity/roaming)
+│   └── interface-assignments.conf     # Auto-detected primary good/bad/wired assignments
 ├── scripts/
-│   ├── traffic/
-│   │   ├── connect_and_curl.sh         # Wi-Fi good client with roaming (ENHANCED)
-│   │   ├── fail_auth_loop.sh           # Wi-Fi bad client (auth failures)
-│   │   ├── wired_simulation.sh         # Wired client with integrated traffic
-│   │   └── interface_traffic_generator.sh # Shared traffic generator
-│   ├── install/                        # Installation sub-scripts
+│   ├── connect_and_curl.sh             # Wi-Fi good client with roaming
+│   ├── fail_auth_loop.sh               # Wi-Fi bad client (auth failures)
+│   ├── wired_simulation.sh             # Wired client with integrated traffic
+│   ├── wifi_client.sh                  # Dispatcher for wifi-client@<iface> instances
+│   ├── interface_traffic_generator.sh  # Shared traffic generator
+│   ├── apply_netem.sh                  # Per-interface latency/loss/jitter emulation
+│   ├── install/                        # Installation sub-scripts (re-runnable on-device)
 │   ├── diagnose-dashboard.sh           # System diagnostic tool
 │   └── fix-services.sh                 # Service repair utility
 ├── templates/
@@ -211,7 +263,8 @@ sudo systemctl restart wifi-good.service
     ├── main.log                        # Dashboard logs
     ├── wired.log                       # Ethernet client logs
     ├── wifi-good.log                   # Wi-Fi good client with roaming event logs
-    └── wifi-bad.log                    # Wi-Fi bad client logs
+    ├── wifi-bad.log                    # Wi-Fi bad client logs
+    └── wifi-<iface>.log                # One log per extra wifi-client@ instance
 ```
 
 ## 🔍 **Roaming Monitoring & Troubleshooting**
@@ -340,7 +393,16 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🏷 **Version History**
 
-### **v5.1.0 (Current) - Enhanced Wi-Fi Roaming**
+### **v5.2.0 (Current) - Multi-Client Scaling**
+- ✅ **One client per USB adapter** via `wifi-client@<iface>` systemd template instances
+- ✅ **`clients.conf` personas** (role, hostname, intensity, roaming) per interface
+- ✅ **Per-interface network emulation** from the dashboard (any client, not just wlan0)
+- ✅ **Installer installs from one git revision** - no stale embedded fallbacks
+- ✅ **Removed hostname locks / staggered startup** - clients start independently
+- ✅ **Multi-NIC ARP/rp_filter sysctls** for many interfaces on one subnet
+- ✅ **MIT LICENSE + CI** (shell syntax, ShellCheck, Python compile)
+
+### **v5.1.0 - Enhanced Wi-Fi Roaming**
 - ✅ **Wi-Fi client roaming simulation** between multiple BSSIDs
 - ✅ **Intelligent BSSID discovery** and signal-based roaming decisions
 - ✅ **Traffic continuity** during roaming events for realistic behavior
