@@ -182,9 +182,9 @@ generate_heavy_traffic() {
     
     # Download traffic with byte tracking
     {
-        local url="${DOWNLOAD_URLS[0]}"
+        local url="${DOWNLOAD_URLS[$((RANDOM % ${#DOWNLOAD_URLS[@]}))]}"
         local tmp_file="/tmp/wired_download_$$"
-        log_msg "Starting download: $(basename "$url")"
+        log_msg "Starting download: $url"
         if timeout 120 curl --interface "$INTERFACE" \
                --max-time 90 \
                --silent \
@@ -345,8 +345,6 @@ main_loop() {
 
 cleanup_and_exit() {
     log_msg "Cleaning up wired client simulation..."
-    # Clean up DHCP hostname lock
-    sudo rm -f "/var/run/wifi-dashboard/hostname-${INTERFACE}.lock" 2>/dev/null || true
     log_msg "Wired client simulation stopped"
     exit 0
 }

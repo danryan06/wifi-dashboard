@@ -8,7 +8,8 @@ set -uo pipefail
 export PATH="$PATH:/usr/local/bin:/usr/sbin:/sbin:/home/pi/.local/bin"
 DASHBOARD_DIR="/home/pi/wifi_test_dashboard"
 LOG_DIR="$DASHBOARD_DIR/logs"
-LOG_FILE="$LOG_DIR/wifi-good.log"
+LOG_FILE="${LOG_FILE:-$LOG_DIR/wifi-good.log}"
+CLIENT_LABEL="${CLIENT_LABEL:-WIFI-GOOD}"
 CONFIG_FILE="$DASHBOARD_DIR/configs/ssid.conf"
 SETTINGS="$DASHBOARD_DIR/configs/settings.conf"
 ROTATE_UTIL="$DASHBOARD_DIR/scripts/log_rotation_utils.sh"
@@ -18,9 +19,10 @@ INTERFACE="${INTERFACE:-wlan0}"
 HOSTNAME="${WIFI_GOOD_HOSTNAME:-${HOSTNAME:-CNXNMist-WiFiGood}}"
 LOG_MAX_SIZE_BYTES="${LOG_MAX_SIZE_BYTES:-10485760}"   # 10MB default
 
-# HOSTNAME LOCK SYSTEM
-HOSTNAME_LOCK_DIR="/var/run/wifi-dashboard"
-HOSTNAME_LOCK_FILE="$HOSTNAME_LOCK_DIR/hostname-${INTERFACE}.lock"
+# Values passed by the service unit / dispatcher must survive `source settings.conf`
+ENV_INTERFACE="${INTERFACE:-}"
+ENV_ROAMING="${WIFI_ROAMING_ENABLED:-}"
+ENV_INTENSITY="${TRAFFIC_INTENSITY:-}"
 
 # Trap errors but DO NOT exit service
 trap 'ec=$?; echo "[$(date "+%F %T")] TRAP-ERR: cmd=\"$BASH_COMMAND\" ec=$ec line=$LINENO" | tee -a "$LOG_FILE"' ERR
@@ -48,10 +50,10 @@ rotate_basic() {
 }
 
 log_msg() {
-  local msg="[$(date '+%F %T')] WIFI-GOOD: $1"
+  local msg="[$(date '+%F %T')] ${CLIENT_LABEL}: $1"
   if declare -F log_msg_with_rotation >/dev/null; then
     echo "$msg"
-    log_msg_with_rotation "$LOG_FILE" "$msg" "WIFI-GOOD"
+    log_msg_with_rotation "$LOG_FILE" "$msg" "$CLIENT_LABEL"
   else
     mkdir -p "$LOG_DIR" 2>/dev/null || true
     rotate_basic
@@ -60,66 +62,16 @@ log_msg() {
 }
 
 # =============================================================================
-# HOSTNAME LOCK SYSTEM
+# PER-INTERFACE DHCP HOSTNAME MANAGEMENT
 # =============================================================================
-
-acquire_hostname_lock() {
-    local interface="$1"
-    local desired_hostname="$2"
-    local max_wait=30
-    local wait_count=0
-    
-    log_msg "🔒 Acquiring hostname lock for $interface -> $desired_hostname"
-    $SUDO mkdir -p "$HOSTNAME_LOCK_DIR"
-    
-    while [[ -f "$HOSTNAME_LOCK_FILE" && $wait_count -lt $max_wait ]]; do
-        local existing_lock
-        existing_lock=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
-        if [[ "$existing_lock" == "${interface}:${desired_hostname}"* ]]; then
-            log_msg "✅ Lock already held by this service"
-            return 0
-        fi
-        log_msg "⏳ Waiting for hostname lock to clear: $existing_lock"
-        sleep 2
-        ((wait_count += 2))
-    done
-    
-    echo "${interface}:${desired_hostname}:$(date +%s):$$" | $SUDO tee "$HOSTNAME_LOCK_FILE" >/dev/null
-    local lock_content
-    lock_content=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
-    if [[ "$lock_content" == "${interface}:${desired_hostname}:"* ]]; then
-        log_msg "✅ Hostname lock acquired successfully"
-        return 0
-    else
-        log_msg "❌ Failed to acquire hostname lock"
-        return 1
-    fi
-}
-
-release_hostname_lock() {
-    local interface="$1"
-    if [[ -f "$HOSTNAME_LOCK_FILE" ]]; then
-        local lock_content
-        lock_content=$(cat "$HOSTNAME_LOCK_FILE" 2>/dev/null || echo "")
-        if [[ "$lock_content" == "${interface}:"* ]]; then
-            $SUDO rm -f "$HOSTNAME_LOCK_FILE"
-            log_msg "🔓 Released hostname lock for $interface"
-        fi
-    fi
-}
-
-# =============================================================================
-# ENHANCED HOSTNAME MANAGEMENT WITH LOCKS
-# =============================================================================
+# Hostnames are set per-connection/per-interface via NetworkManager, so no
+# cross-service serialization (locks/sleeps) is needed: each interface has its
+# own MAC address and DHCP hostname.
 
 set_device_hostname() {
     local desired_hostname="$1"
     local interface="$2"
-    if ! acquire_hostname_lock "$interface" "$desired_hostname"; then
-        log_msg "❌ Cannot set hostname - failed to acquire lock"
-        return 1
-    fi
-    
+
     log_msg "🏷️ Setting DHCP hostname to: $desired_hostname for interface $interface (NOT changing system hostname)"
     local mac_addr=$(ip link show "$interface" 2>/dev/null | awk '/link\/ether/ {print $2}' || echo "unknown")
     log_msg "📱 Interface $interface MAC address: $mac_addr"
@@ -329,13 +281,14 @@ maybe_save_stats() {
 DEMO_MODE="${DEMO_MODE:-true}"
 OPPORTUNISTIC_ROAMING_INTERVAL="${OPPORTUNISTIC_ROAMING_INTERVAL:-180}"
 LAST_ROAM_TIME="${LAST_ROAM_TIME:-0}"  # Initialize roaming timer
-INTERFACE="${WIFI_GOOD_INTERFACE:-$INTERFACE}"
+# Unit/dispatcher-provided interface wins over settings.conf
+INTERFACE="${ENV_INTERFACE:-${WIFI_GOOD_INTERFACE:-$INTERFACE}}"
 REFRESH_INTERVAL="${WIFI_GOOD_REFRESH_INTERVAL:-60}"
 CONNECTION_TIMEOUT="${WIFI_CONNECTION_TIMEOUT:-30}"
 MAX_RETRIES="${WIFI_MAX_RETRY_ATTEMPTS:-3}"
 
-# Roaming config
-ROAMING_ENABLED="${WIFI_ROAMING_ENABLED:-true}"
+# Roaming config (unit/dispatcher env wins over settings.conf)
+ROAMING_ENABLED="${ENV_ROAMING:-${WIFI_ROAMING_ENABLED:-true}}"
 ROAMING_INTERVAL="${WIFI_ROAMING_INTERVAL:-60}"
 ROAMING_SCAN_INTERVAL="${WIFI_ROAMING_SCAN_INTERVAL:-10}"
 # dBm threshold (back-compat for RSSI paths)
@@ -345,8 +298,8 @@ MIN_SIGNAL_PERCENT="${WIFI_MIN_SIGNAL_PERCENT:-30}"
 ROAMING_SIGNAL_DIFF="${WIFI_ROAMING_SIGNAL_DIFF:-10}"
 WIFI_BAND_PREFERENCE="${WIFI_BAND_PREFERENCE:-both}"
 
-# Traffic config
-TRAFFIC_INTENSITY="${WLAN0_TRAFFIC_INTENSITY:-medium}"
+# Traffic config (unit/dispatcher env wins over settings.conf)
+TRAFFIC_INTENSITY="${ENV_INTENSITY:-${WLAN0_TRAFFIC_INTENSITY:-medium}}"
 ENABLE_INTEGRATED_TRAFFIC="${WIFI_GOOD_INTEGRATED_TRAFFIC:-true}"
 
 # Ensure stats dir and compute STATS_FILE based on the final INTERFACE
@@ -410,11 +363,19 @@ check_wifi_interface() {
 }
 
 get_current_bssid() {
-  # Try nmcli first, then iw
+  # iw is authoritative for the interface we manage; nmcli is the fallback.
+  # (nmcli -t escapes BSSID colons as '\:', so the value must be read as the
+  # line remainder and unescaped - never parsed with a plain awk -F:.)
   local bssid=""
-  bssid="$(nmcli -t -f ACTIVE,BSSID,SSID dev wifi | awk -F: '$1=="yes"{print $2; exit}')" || true
+  bssid="$(iw dev "$INTERFACE" link 2>/dev/null | awk '/Connected to/{print $3; exit}')" || true
   if [[ -z "$bssid" || ! "$bssid" =~ : ]]; then
-    bssid="$(iw dev "$INTERFACE" link 2>/dev/null | awk '/Connected to/{print $3; exit}')" || true
+    local active rest
+    while IFS=: read -r active rest; do
+      if [[ "$active" == "yes" ]]; then
+        bssid="$(echo "$rest" | grep -E -o '([0-9A-Fa-f]{2}(\\:|:)){5}[0-9A-Fa-f]{2}' | head -n1)"
+        break
+      fi
+    done < <($SUDO nmcli -t -f ACTIVE,BSSID dev wifi 2>/dev/null)
   fi
   bssid="${bssid//\\n/}"; bssid="${bssid//\\r/}"; bssid="${bssid//\\t/}"
   # Unescape nmcli's escaped colons (\:) and normalize case
@@ -1004,7 +965,6 @@ enhanced_good_client_setup() {
 cleanup_and_exit() {
   log_msg "🧹 Cleaning up good client..."
   save_stats
-  release_hostname_lock "$INTERFACE"
   $SUDO nmcli device disconnect "$INTERFACE" 2>/dev/null || true
   log_msg "✅ Stopped (final stats saved: Down=${TOTAL_DOWN}B, Up=${TOTAL_UP}B)"
   exit 0

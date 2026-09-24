@@ -6,13 +6,18 @@ set -uo pipefail
 export PATH="$PATH:/usr/local/bin:/usr/sbin:/sbin:/home/pi/.local/bin"
 DASHBOARD_DIR="/home/pi/wifi_test_dashboard"
 LOG_DIR="$DASHBOARD_DIR/logs"
-LOG_FILE="$LOG_DIR/wifi-bad.log"
+LOG_FILE="${LOG_FILE:-$LOG_DIR/wifi-bad.log}"
+CLIENT_LABEL="${CLIENT_LABEL:-WIFI-BAD}"
 CONFIG_FILE="$DASHBOARD_DIR/configs/ssid.conf"
 SETTINGS="$DASHBOARD_DIR/configs/settings.conf"
 
 INTERFACE="${INTERFACE:-wlan1}"
 HOSTNAME="${WIFI_BAD_HOSTNAME:-${HOSTNAME:-CNXNMist-WiFiBad}}"
 REFRESH_INTERVAL="${WIFI_BAD_REFRESH_INTERVAL:-45}"
+
+# Values passed by the service unit / dispatcher must survive `source settings.conf`
+ENV_INTERFACE="${INTERFACE:-}"
+ENV_HOSTNAME="${WIFI_BAD_HOSTNAME:-}"
 
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 mkdir -p "$DASHBOARD_DIR/stats" 2>/dev/null || true
@@ -21,18 +26,7 @@ mkdir -p "$DASHBOARD_DIR/stats" 2>/dev/null || true
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then SUDO="sudo"; else SUDO=""; fi
 
 log_msg() {
-  echo "[$(date '+%F %T')] WIFI-BAD: $1" | tee -a "$LOG_FILE"
-}
-
-# --- Hostname lock helpers (lightweight) ---
-LOCK_DIR="/var/run/wifi-dashboard"
-LOCK_FILE="$LOCK_DIR/hostname-${INTERFACE}.lock"
-acquire_hostname_lock() {
-  $SUDO mkdir -p "$LOCK_DIR"
-  echo "${INTERFACE}:${HOSTNAME}:$(date +%s):$$" | $SUDO tee "$LOCK_FILE" >/dev/null
-}
-release_hostname_lock() {
-  [[ -f "$LOCK_FILE" ]] && $SUDO rm -f "$LOCK_FILE" || true
+  echo "[$(date '+%F %T')] ${CLIENT_LABEL}: $1" | tee -a "$LOG_FILE"
 }
 
 # --- Persistent totals (bytes) ---
@@ -80,16 +74,16 @@ maybe_save_stats() {  # [UPDATED] debounced to limit writes
   fi
 }
 
-# --- Read settings and finalize interface ---
+# --- Read settings and finalize interface (unit/dispatcher env wins) ---
 [[ -f "$SETTINGS" ]] && source "$SETTINGS" || true
-INTERFACE="${WIFI_BAD_INTERFACE:-$INTERFACE}"
-HOSTNAME="${WIFI_BAD_HOSTNAME:-$HOSTNAME}"
+INTERFACE="${ENV_INTERFACE:-${WIFI_BAD_INTERFACE:-$INTERFACE}}"
+HOSTNAME="${ENV_HOSTNAME:-${WIFI_BAD_HOSTNAME:-$HOSTNAME}}"
 REFRESH_INTERVAL="${WIFI_BAD_REFRESH_INTERVAL:-$REFRESH_INTERVAL}"
 
 # Recompute STATS_FILE once the interface is FINAL  # [UPDATED]
 STATS_FILE="$DASHBOARD_DIR/stats/stats_${INTERFACE}.json"  # [UPDATED]
 load_stats
-trap 'save_stats; release_hostname_lock' EXIT
+trap 'save_stats' EXIT
 
 # --- Utilities ---
 read_ssid() {
@@ -124,7 +118,6 @@ EOF
 
 # --- Main bad-auth loop ---
 log_msg "🚀 Starting Wi-Fi bad client on $INTERFACE (hostname: $HOSTNAME)"
-acquire_hostname_lock
 configure_dhcp_hostname "$HOSTNAME" "$INTERFACE"
 
 while true; do
