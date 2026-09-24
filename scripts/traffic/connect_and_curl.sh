@@ -50,11 +50,11 @@ rotate_basic() {
 }
 
 log_msg() {
-  local msg="[$(date '+%F %T')] ${CLIENT_LABEL}: $1"
   if declare -F log_msg_with_rotation >/dev/null; then
-    echo "$msg"
-    log_msg_with_rotation "$LOG_FILE" "$msg" "$CLIENT_LABEL"
+    # log_msg_with_rotation adds the timestamp/label prefix and tees to stdout
+    log_msg_with_rotation "$LOG_FILE" "$1" "$CLIENT_LABEL"
   else
+    local msg="[$(date '+%F %T')] ${CLIENT_LABEL}: $1"
     mkdir -p "$LOG_DIR" 2>/dev/null || true
     rotate_basic
     echo "$msg" | tee -a "$LOG_FILE"
@@ -463,10 +463,10 @@ connect_locked_bssid() {
     log_msg "✅ nmcli BSSID connect reported success: ${OUT}"
     sleep 5
     local actual_bssid; actual_bssid="$(get_current_bssid)"
-    if [[ "$actual_bssid" == "${bssid,,}" ]]; then
+    if [[ "${actual_bssid^^}" == "${bssid^^}" ]]; then
       log_msg "✅ BSSID verification successful: connected to $actual_bssid"; return 0
     else
-      log_msg "❌ BSSID mismatch: connected to ${actual_bssid:-unknown}, expected ${bssid,,}"
+      log_msg "❌ BSSID mismatch: connected to ${actual_bssid:-unknown}, expected $bssid"
     fi
   else
     log_msg "❌ nmcli BSSID connect failed: ${OUT}"
@@ -497,10 +497,10 @@ connect_locked_bssid() {
       sleep 5
       local actual_bssid; actual_bssid="$(get_current_bssid)"
       $SUDO nmcli connection delete "$profile_name" 2>/dev/null || true
-      if [[ "$actual_bssid" == "${bssid,,}" ]]; then
+      if [[ "${actual_bssid^^}" == "${bssid^^}" ]]; then
         log_msg "✅ Profile-based BSSID connection successful: $actual_bssid"; return 0
       else
-        log_msg "❌ Profile-based BSSID mismatch: ${actual_bssid:-unknown} vs ${bssid,,}"
+        log_msg "❌ Profile-based BSSID mismatch: ${actual_bssid:-unknown} vs $bssid"
       fi
     else
       log_msg "❌ Profile activation failed"; $SUDO nmcli connection delete "$profile_name" 2>/dev/null || true
@@ -550,7 +550,7 @@ EOF
         sleep 8; $SUDO dhclient "$INTERFACE" >/dev/null 2>&1 || true; sleep 3
         local actual_bssid; actual_bssid="$(get_current_bssid)"
         rm -f "$wpa_conf"; pkill -f "wpa_supplicant.*$INTERFACE" || true
-        if [[ "$actual_bssid" == "${bssid,,}" ]]; then
+        if [[ "${actual_bssid^^}" == "${bssid^^}" ]]; then
           log_msg "✅ iw+wpa_supplicant BSSID connection successful: $actual_bssid"; return 0
         else
           log_msg "❌ iw+wpa BSSID mismatch: ${actual_bssid:-unknown}"
@@ -798,6 +798,21 @@ connect_to_wifi_with_roaming() {
   local OUT
   if OUT="$($SUDO nmcli --wait 45 device wifi connect "${local_ssid}" password "${local_password}" ifname "$INTERFACE" 2>&1)"; then
     log_msg "✅ Fallback connection successful: ${OUT}"
+  elif [[ "$OUT" == *key-mgmt* ]]; then
+    # nmcli couldn't infer security from its scan cache; build an explicit WPA-PSK profile
+    log_msg "⚠️ Fallback connect failed (${OUT}); retrying with explicit WPA-PSK profile"
+    local fb_profile="${local_ssid}-fallback"
+    $SUDO nmcli connection delete "$fb_profile" >/dev/null 2>&1 || true
+    if $SUDO nmcli connection add \
+        type wifi con-name "$fb_profile" ifname "$INTERFACE" ssid "$local_ssid" \
+        wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$local_password" \
+        ipv4.method auto connection.autoconnect no >/dev/null 2>&1 \
+       && $SUDO nmcli --wait 45 connection up "$fb_profile" >/dev/null 2>&1; then
+      log_msg "✅ Explicit-profile fallback connection successful"
+    else
+      $SUDO nmcli connection delete "$fb_profile" >/dev/null 2>&1 || true
+      log_msg "❌ Explicit-profile fallback connection failed"; return 1
+    fi
   else
     log_msg "❌ Fallback connection failed: ${OUT}"; return 1
   fi

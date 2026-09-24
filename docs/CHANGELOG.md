@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.1] - 2026-09-24
+
+### 🐛 Fixed
+- **BSSID verification false negatives**: `get_current_bssid` normalizes to
+  uppercase but the three verification checks in `connect_locked_bssid`
+  compared against a lowercased target, so every successful BSSID-locked
+  connection was declared a "mismatch" and torn down. Comparisons are now
+  case-insensitive.
+- **`key-mgmt: property is missing` on fallback connect**: when nmcli cannot
+  infer the network's security type from a cold scan cache, the fallback
+  connect now retries with an explicitly configured WPA-PSK profile.
+- **Double log prefix**: `log_msg` no longer prefixes messages before handing
+  them to `log_msg_with_rotation`, which adds its own prefix.
+
 ## [5.2.0] - 2026-09-24
 
 ### 🎉 Major Release: Multi-Client Scaling

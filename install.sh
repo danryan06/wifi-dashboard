@@ -16,7 +16,7 @@ REPO_GIT_URL="${REPO_GIT_URL:-https://github.com/danryan06/wifi-dashboard.git}"
 BRANCH="${BRANCH:-main}"
 PI_USER="${PI_USER:-$(getent passwd 1000 | cut -d: -f1 2>/dev/null || echo 'pi')}"
 PI_HOME="/home/$PI_USER"
-VERSION="${VERSION:-v5.2.0}"
+VERSION="${VERSION:-v5.2.1}"
 
 WORK_DIR="/tmp/wifi-dashboard"
 INSTALL_LOG="${WORK_DIR}/install.log"
